@@ -6,8 +6,8 @@
       "type": "coreclr",
       "request": "launch",
       "preLaunchTask": "build DnevnikSdelok",
-      "program": "${workspaceFolder}\\DnevnikSdelok\\bin\\Debug\\net10.0-windows\\DnevnikSdelok.dll",
-      "cwd": "${workspaceFolder}\\DnevnikSdelok",
+      "program": "${workspaceFolder}\\bin\\Debug\\net10.0-windows\\DnevnikSdelok.dll",
+      "cwd": "${workspaceFolder}",
       "console": "internalConsole",
       "stopAtEntry": false
     }
