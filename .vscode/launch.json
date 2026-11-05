@@ -1,0 +1,15 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DnevnikSdelok: запуск из исходников",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build DnevnikSdelok",
+      "program": "${workspaceFolder}\\DnevnikSdelok\\bin\\Debug\\net10.0-windows\\DnevnikSdelok.dll",
+      "cwd": "${workspaceFolder}\\DnevnikSdelok",
+      "console": "internalConsole",
+      "stopAtEntry": false
+    }
+  ]
+}
