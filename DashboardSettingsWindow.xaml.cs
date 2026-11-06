@@ -35,7 +35,6 @@ public partial class DashboardSettingsWindow : Window
     private void Rebuild()
     {
         _isBuilding = true;
-        ShowHeaderCheckBox.IsChecked = _preferences.ShowHeader;
         GlobalColorsPanel.Children.Clear();
         AddColorEditor(GlobalColorsPanel, "Фон программы", () => _preferences.WindowBackground,
             value => _preferences.WindowBackground = value, 150);
@@ -45,12 +44,14 @@ public partial class DashboardSettingsWindow : Window
             value => _preferences.MutedForeground = value, 135);
         AddColorEditor(GlobalColorsPanel, "Цвет акцента", () => _preferences.AccentColor,
             value => _preferences.AccentColor = value, 130);
-        AddColorEditor(GlobalColorsPanel, "Линии и фон графика TradingView", () => _preferences.ChartGridColor,
+        AddColorEditor(GlobalColorsPanel, "Линии графика", () => _preferences.ChartGridColor,
             value => _preferences.ChartGridColor = value, 145);
-        AddColorEditor(GlobalColorsPanel, "Свеча роста TradingView", () => _preferences.ChartBullColor,
+        AddColorEditor(GlobalColorsPanel, "Свеча роста", () => _preferences.ChartBullColor,
             value => _preferences.ChartBullColor = value, 125);
-        AddColorEditor(GlobalColorsPanel, "Свеча падения TradingView", () => _preferences.ChartBearColor,
+        AddColorEditor(GlobalColorsPanel, "Свеча падения", () => _preferences.ChartBearColor,
             value => _preferences.ChartBearColor = value, 135);
+        TimeZoneSelector.ItemsSource = TimeZoneInfo.GetSystemTimeZones();
+        TimeZoneSelector.SelectedValue = _preferences.TimeZoneId;
 
         BuildWidgets();
         BuildColumns();
@@ -325,13 +326,15 @@ public partial class DashboardSettingsWindow : Window
             : "Не удалось сохранить настройки.";
     }
 
-    private void ShowHeaderChanged(object sender, RoutedEventArgs e)
+    private void TimeZoneSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!_isBuilding)
+        if (_isBuilding || TimeZoneSelector.SelectedValue is not string timeZoneId)
         {
-            _preferences.ShowHeader = ShowHeaderCheckBox.IsChecked == true;
-            SaveAndApply();
+            return;
         }
+
+        _preferences.TimeZoneId = timeZoneId;
+        SaveAndApply();
     }
 
     private void ActionClick(object sender, RoutedEventArgs e)

@@ -80,6 +80,9 @@ public sealed class JournalDatabase
                 CommissionAsset TEXT NOT NULL,
                 RealizedPnl TEXT NOT NULL,
                 ExecutedAtUtc TEXT NOT NULL,
+                ExchangeOrderId TEXT NOT NULL DEFAULT '',
+                OrderType TEXT NOT NULL DEFAULT '',
+                IsMaker INTEGER NULL,
                 PRIMARY KEY (ConnectionId, Symbol, ExchangeTradeId),
                 FOREIGN KEY (ConnectionId) REFERENCES ApiConnections(Id) ON DELETE CASCADE
             );
@@ -136,7 +139,40 @@ public sealed class JournalDatabase
             """;
         command.ExecuteNonQuery();
         EnsureConnectionBalanceColumn(connection);
+        EnsureExecutionColumns(connection);
         EnsureExecutionNoteColumns(connection);
+    }
+
+    private static void EnsureExecutionColumns(SqliteConnection connection)
+    {
+        var existing = new HashSet<string>(StringComparer.Ordinal);
+        using (var check = connection.CreateCommand())
+        {
+            check.CommandText = "PRAGMA table_info(Executions);";
+            using var reader = check.ExecuteReader();
+            while (reader.Read())
+            {
+                existing.Add(reader.GetString(1));
+            }
+        }
+
+        var migrations = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["ExchangeOrderId"] = "TEXT NOT NULL DEFAULT ''",
+            ["OrderType"] = "TEXT NOT NULL DEFAULT ''",
+            ["IsMaker"] = "INTEGER NULL"
+        };
+        foreach (var (column, definition) in migrations)
+        {
+            if (existing.Contains(column))
+            {
+                continue;
+            }
+
+            using var alter = connection.CreateCommand();
+            alter.CommandText = $"ALTER TABLE Executions ADD COLUMN {column} {definition};";
+            alter.ExecuteNonQuery();
+        }
     }
 
     private static void EnsureExecutionNoteColumns(SqliteConnection connection)
@@ -279,6 +315,7 @@ public sealed class JournalDatabase
                 JournalConclusion = reader.GetString(10),
                 VideoUrl = reader.GetString(11),
                 ScreenshotRelativePath = reader.GetString(12),
+                ScreenshotRelativePaths = ReadScreenshotPaths(reader.GetString(12)),
                 ChartDrawingsJson = reader.GetString(13)
             };
             result[(reader.GetInt32(0), reader.GetString(1), reader.GetString(2))] = note;
@@ -327,9 +364,38 @@ public sealed class JournalDatabase
         command.Parameters.AddWithValue("$journalDescription", row.JournalDescription);
         command.Parameters.AddWithValue("$journalConclusion", row.JournalConclusion);
         command.Parameters.AddWithValue("$videoUrl", row.VideoUrl);
-        command.Parameters.AddWithValue("$screenshotRelativePath", row.ScreenshotRelativePath);
+        var screenshotPaths = row.ScreenshotRelativePaths.Count > 0
+            ? row.ScreenshotRelativePaths
+            : string.IsNullOrWhiteSpace(row.ScreenshotRelativePath)
+                ? []
+                : [row.ScreenshotRelativePath];
+        command.Parameters.AddWithValue(
+            "$screenshotRelativePath",
+            JsonSerializer.Serialize(screenshotPaths));
         command.Parameters.AddWithValue("$chartDrawingsJson", row.ChartDrawingsJson);
         command.ExecuteNonQuery();
+    }
+
+    private static List<string> ReadScreenshotPaths(string storedValue)
+    {
+        if (string.IsNullOrWhiteSpace(storedValue))
+        {
+            return [];
+        }
+
+        if (storedValue.StartsWith("[", StringComparison.Ordinal))
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<List<string>>(storedValue) ?? [];
+            }
+            catch (JsonException)
+            {
+                throw new InvalidDataException("Список изображений сделки повреждён.");
+            }
+        }
+
+        return [storedValue];
     }
 
     public string CopyTradeImage(string sourcePath)
@@ -358,11 +424,22 @@ public sealed class JournalDatabase
             return null;
         }
 
-        var fullPath = Path.GetFullPath(Path.Combine(_applicationDataDirectory, relativePath));
-        var attachmentRoot = Path.GetFullPath(AttachmentsDirectory) + Path.DirectorySeparatorChar;
+        string fullPath;
+        string attachmentRoot;
+        try
+        {
+            fullPath = Path.GetFullPath(Path.Combine(_applicationDataDirectory, relativePath));
+            attachmentRoot = Path.GetFullPath(AttachmentsDirectory) + Path.DirectorySeparatorChar;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return null;
+        }
+
         if (!fullPath.StartsWith(attachmentRoot, StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("Путь к изображению сделки выходит за папку вложений.");
+            return null;
         }
         return File.Exists(fullPath) ? fullPath : null;
     }
@@ -598,13 +675,20 @@ public sealed class JournalDatabase
             INSERT INTO Executions (
                 ConnectionId, ExchangeTradeId, Symbol, BaseAsset, QuoteAsset, Side,
                 PositionSide, Market, Price, Quantity, QuoteQuantity, Commission,
-                CommissionAsset, RealizedPnl, ExecutedAtUtc
+                CommissionAsset, RealizedPnl, ExecutedAtUtc,
+                ExchangeOrderId, OrderType, IsMaker
             ) VALUES (
                 $connectionId, $tradeId, $symbol, $baseAsset, $quoteAsset, $side,
                 $positionSide, $market, $price, $quantity, $quoteQuantity, $commission,
-                $commissionAsset, $realizedPnl, $executedAt
+                $commissionAsset, $realizedPnl, $executedAt,
+                $orderId, $orderType, $isMaker
             )
-            ON CONFLICT(ConnectionId, Symbol, ExchangeTradeId) DO NOTHING;
+            ON CONFLICT(ConnectionId, Symbol, ExchangeTradeId) DO UPDATE SET
+                ExchangeOrderId = CASE WHEN excluded.ExchangeOrderId <> ''
+                    THEN excluded.ExchangeOrderId ELSE Executions.ExchangeOrderId END,
+                OrderType = CASE WHEN excluded.OrderType <> ''
+                    THEN excluded.OrderType ELSE Executions.OrderType END,
+                IsMaker = COALESCE(excluded.IsMaker, Executions.IsMaker);
             """;
 
         var parameters = new Dictionary<string, SqliteParameter>();
@@ -612,11 +696,13 @@ public sealed class JournalDatabase
         {
             "$connectionId", "$tradeId", "$symbol", "$baseAsset", "$quoteAsset", "$side",
             "$positionSide", "$market", "$price", "$quantity", "$quoteQuantity",
-            "$commission", "$commissionAsset", "$realizedPnl", "$executedAt"
+            "$commission", "$commissionAsset", "$realizedPnl", "$executedAt",
+            "$orderId", "$orderType"
         })
         {
             parameters[name] = command.Parameters.Add(name, SqliteType.Text);
         }
+        parameters["$isMaker"] = command.Parameters.Add("$isMaker", SqliteType.Integer);
 
         foreach (var trade in executions)
         {
@@ -635,6 +721,11 @@ public sealed class JournalDatabase
             parameters["$commissionAsset"].Value = trade.CommissionAsset;
             parameters["$realizedPnl"].Value = Format(trade.RealizedPnl);
             parameters["$executedAt"].Value = trade.ExecutedAtUtc.ToString("O", CultureInfo.InvariantCulture);
+            parameters["$orderId"].Value = trade.ExchangeOrderId;
+            parameters["$orderType"].Value = trade.OrderType;
+            parameters["$isMaker"].Value = trade.IsMaker.HasValue
+                ? trade.IsMaker.Value ? 1 : 0
+                : DBNull.Value;
             command.ExecuteNonQuery();
         }
         transaction.Commit();
@@ -647,7 +738,8 @@ public sealed class JournalDatabase
         command.CommandText = """
             SELECT ConnectionId, ExchangeTradeId, Symbol, BaseAsset, QuoteAsset,
                    Side, PositionSide, Market, Price, Quantity, QuoteQuantity,
-                   Commission, CommissionAsset, RealizedPnl, ExecutedAtUtc
+                   Commission, CommissionAsset, RealizedPnl, ExecutedAtUtc,
+                   ExchangeOrderId, OrderType, IsMaker
             FROM Executions
             ORDER BY ExecutedAtUtc DESC, ExchangeTradeId DESC
             LIMIT $limit;
@@ -676,10 +768,60 @@ public sealed class JournalDatabase
                 ExecutedAtUtc = DateTime.Parse(
                     reader.GetString(14),
                     CultureInfo.InvariantCulture,
-                    DateTimeStyles.RoundtripKind)
+                    DateTimeStyles.RoundtripKind),
+                ExchangeOrderId = reader.GetString(15),
+                OrderType = reader.GetString(16),
+                IsMaker = reader.IsDBNull(17) ? null : reader.GetInt32(17) != 0
             });
         }
         return result;
+    }
+
+    public void UpdateExecutionOrderType(
+        int connectionId,
+        string symbol,
+        string orderId,
+        string orderType)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Executions
+            SET OrderType = $orderType
+            WHERE ConnectionId = $connectionId
+              AND Symbol = $symbol
+              AND ExchangeOrderId = $orderId;
+            """;
+        command.Parameters.AddWithValue("$orderType", orderType);
+        command.Parameters.AddWithValue("$connectionId", connectionId);
+        command.Parameters.AddWithValue("$symbol", symbol);
+        command.Parameters.AddWithValue("$orderId", orderId);
+        command.ExecuteNonQuery();
+    }
+
+    public void UpdateExecutionOrderMetadata(
+        int connectionId,
+        string symbol,
+        string tradeId,
+        string orderId,
+        bool isMaker)
+    {
+        using var connection = OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            UPDATE Executions
+            SET ExchangeOrderId = $orderId,
+                IsMaker = $isMaker
+            WHERE ConnectionId = $connectionId
+              AND Symbol = $symbol
+              AND ExchangeTradeId = $tradeId;
+            """;
+        command.Parameters.AddWithValue("$orderId", orderId);
+        command.Parameters.AddWithValue("$isMaker", isMaker ? 1 : 0);
+        command.Parameters.AddWithValue("$connectionId", connectionId);
+        command.Parameters.AddWithValue("$symbol", symbol);
+        command.Parameters.AddWithValue("$tradeId", tradeId);
+        command.ExecuteNonQuery();
     }
 
     public void DeleteConnection(int id)
@@ -707,7 +849,7 @@ public sealed class JournalDatabase
             .ToDictionary(
                 item => (item.ConnectionId, item.Symbol, item.Execution.ExchangeTradeId));
         using var writer = new StreamWriter(filePath, false, new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
-        writer.WriteLine("ConnectionName,Market,TradeId,Symbol,BaseAsset,QuoteAsset,Side,PositionSide,Price,Quantity,QuoteQuantity,Commission,CommissionAsset,RealizedPnl,ExecutedAtUtc,PositionEntryAtUtc,TimeInDealSeconds,ExposureFromDeposit,Category,EntryReason,ExitReason,AdditionalInfo,CryptoScreener,Rating,JournalDescription,JournalConclusion,VideoUrl,ScreenshotRelativePath");
+        writer.WriteLine("ConnectionName,Market,TradeId,OrderId,OrderType,Symbol,BaseAsset,QuoteAsset,Side,PositionSide,Price,Quantity,QuoteQuantity,Commission,CommissionAsset,RealizedPnl,ExecutedAtUtc,PositionEntryAtUtc,TimeInDealSeconds,ExposureFromDeposit,Category,EntryReason,ExitReason,AdditionalInfo,CryptoScreener,Rating,JournalDescription,JournalConclusion,VideoUrl,ScreenshotRelativePath");
         foreach (var item in executions)
         {
             notes.TryGetValue(
@@ -719,6 +861,8 @@ public sealed class JournalDatabase
                 Csv(connectionNames.GetValueOrDefault(item.ConnectionId, "Binance")),
                 Csv(item.Market),
                 Csv(item.ExchangeTradeId),
+                Csv(item.ExchangeOrderId),
+                Csv(item.OrderType),
                 Csv(item.Symbol),
                 Csv(item.BaseAsset),
                 Csv(item.QuoteAsset),

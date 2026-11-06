@@ -32,11 +32,16 @@
                         <TextBlock Text="Введите HEX-цвет, например #00FF41. Изменения применяются сразу."
                                    Foreground="{StaticResource MutedBrush}" Margin="0,5,0,12"/>
                         <WrapPanel x:Name="GlobalColorsPanel"/>
-                        <TextBlock Text="Встроенный график TradingView загружается через интернет. Инструменты и рисунки принадлежат TradingView; дневник не сохраняет их локально и не наносит на график отметки исполнений автоматически."
+                        <TextBlock Text="График показывает только исполнения выбранной позиции. Сетку можно включить или отключить щелчком правой кнопки на графике; выбор сохраняется для всех графиков. Часовой пояс влияет на время в журнале и на графике."
                                    Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,10"/>
-                        <CheckBox x:Name="ShowHeaderCheckBox" Content="Показывать верхнюю панель главного экрана"
-                                  Margin="0,6,0,8" Checked="ShowHeaderChanged"
-                                  Unchecked="ShowHeaderChanged"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
+                            <TextBlock Text="Часовой пояс сделок"
+                                       Foreground="{StaticResource MutedBrush}"
+                                       VerticalAlignment="Center" Margin="0,0,10,0"/>
+                            <ComboBox x:Name="TimeZoneSelector" Width="360" Height="32"
+                                      DisplayMemberPath="DisplayName" SelectedValuePath="Id"
+                                      SelectionChanged="TimeZoneSelectionChanged"/>
+                        </StackPanel>
                         <Separator Margin="0,12"/>
                         <TextBlock Text="Виджеты" FontSize="17" FontWeight="SemiBold" Margin="0,5,0,10"/>
                         <TextBlock Text="Порядок в этом списке задаёт расположение на экране. Можно скрыть виджет, вернуть его и изменить размер."

@@ -8,8 +8,9 @@ public sealed class DashboardPreferences
     public string AccentColor { get; set; } = "#00FF41";
     public string ChartGridColor { get; set; } = "#064D1B";
     public string ChartBullColor { get; set; } = "#00FF41";
-    public string ChartBearColor { get; set; } = "#008F11";
-    public bool ShowHeader { get; set; } = true;
+    public string ChartBearColor { get; set; } = "#FF3158";
+    public string TimeZoneId { get; set; } = TimeZoneInfo.Local.Id;
+    public bool ShowChartGrid { get; set; } = true;
     public List<WidgetPreference> Widgets { get; set; } = CreateDefaultWidgets();
     public List<ColumnPreference> Columns { get; set; } = CreateDefaultColumns();
 
@@ -23,7 +24,8 @@ public sealed class DashboardPreferences
         AccentColor = ReplaceLegacyColor(AccentColor, "#72D6A0", "#00FF41");
         ChartGridColor = ReplaceLegacyColor(ChartGridColor, "#25323E", "#064D1B");
         ChartBullColor = ReplaceLegacyColor(ChartBullColor, "#31C48D", "#00FF41");
-        ChartBearColor = ReplaceLegacyColor(ChartBearColor, "#F06464", "#008F11");
+        ChartBearColor = ReplaceLegacyColor(ChartBearColor, "#F06464", "#FF3158");
+        ChartBearColor = ReplaceLegacyColor(ChartBearColor, "#008F11", "#FF3158");
 
         foreach (var widget in Widgets)
         {
@@ -42,8 +44,7 @@ public sealed class DashboardPreferences
         new() { Id = "winrate", Title = "Винрейт", Width = "small", Height = "small", OrderIndex = 1, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" },
         new() { Id = "count", Title = "Исполнений", Width = "small", Height = "small", OrderIndex = 2, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" },
         new() { Id = "sync", Title = "Синхронизация", Width = "small", Height = "small", OrderIndex = 3, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" },
-        new() { Id = "chart", Title = "График кумулятивной прибыли", Width = "wide", Height = "large", OrderIndex = 4, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" },
-        new() { Id = "trades", Title = "Мои сделки", Width = "full", Height = "large", OrderIndex = 5, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" }
+        new() { Id = "chart", Title = "График кумулятивной прибыли", Width = "wide", Height = "large", OrderIndex = 4, Background = "#030A04", Foreground = "#00FF41", Accent = "#00FF41" }
     ];
 
     private static List<ColumnPreference> CreateDefaultColumns()
@@ -65,6 +66,7 @@ public sealed class DashboardPreferences
 
     public void EnsureCatalog()
     {
+        Widgets.RemoveAll(item => item.Id == "trades");
         foreach (var widget in DashboardWidgetDefinition.All)
         {
             if (Widgets.All(item => item.Id != widget.Id))
@@ -147,8 +149,7 @@ public sealed record DashboardWidgetDefinition(string Id, string Title, string D
         new("winrate", "Винрейт", "small", "small"),
         new("count", "Исполнений", "small", "small"),
         new("sync", "Синхронизация", "small", "small"),
-        new("chart", "График кумулятивной прибыли", "wide", "large"),
-        new("trades", "Мои сделки", "full", "large")
+        new("chart", "График кумулятивной прибыли", "wide", "large")
     ];
 }
 

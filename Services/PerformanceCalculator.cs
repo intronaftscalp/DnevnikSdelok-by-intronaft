@@ -18,6 +18,7 @@ public static class PerformanceCalculator
         public required DateTime EntryTimeUtc { get; init; }
         public required int Direction { get; init; }
         public required decimal RemainingQuantity { get; set; }
+        public required string PositionId { get; init; }
         public decimal? ExposureMultiple { get; init; }
     }
 
@@ -31,8 +32,10 @@ public static class PerformanceCalculator
         public DateTime? EntryTimeUtc { get; set; }
         public decimal WeightedDurationTicks { get; set; }
         public decimal WeightedQuantity { get; set; }
+        public TimeSpan? PositionDuration { get; set; }
         public decimal WeightedExposure { get; set; }
         public decimal ExposureQuantity { get; set; }
+        public string? PositionId { get; set; }
         public bool IsPositionEntry { get; set; }
         public bool IsPositionExit { get; set; }
 
@@ -48,9 +51,21 @@ public static class PerformanceCalculator
         }
 
         public TimeSpan? GetAverageDuration() =>
-            WeightedQuantity > 0
+            PositionDuration ??
+            (WeightedQuantity > 0
                 ? TimeSpan.FromTicks((long)(WeightedDurationTicks / WeightedQuantity))
-                : null;
+                : null);
+
+        public void SetPositionDuration(DateTime entryTimeUtc, DateTime endTimeUtc)
+        {
+            if (!EntryTimeUtc.HasValue || entryTimeUtc < EntryTimeUtc.Value)
+            {
+                EntryTimeUtc = entryTimeUtc;
+            }
+
+            PositionDuration = TimeSpan.FromTicks(
+                Math.Max(0, (endTimeUtc - EntryTimeUtc.Value).Ticks));
+        }
 
         public void AddExposure(decimal? exposure, decimal quantity)
         {
@@ -224,7 +239,10 @@ public static class PerformanceCalculator
                 .IsPositionEntry ?? false,
             IsPositionExit = lifecycleMetrics
                 .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
-                .IsPositionExit ?? false
+                .IsPositionExit ?? false,
+            PositionId = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
+                .PositionId
         }).ToList();
 
         return new PerformanceSummary(
@@ -292,9 +310,12 @@ public static class PerformanceCalculator
             }
             if (position.OpenFills.Count == 0 || position.OpenFills[0].Direction == direction)
             {
+                var positionId = position.OpenFills.Count == 0
+                    ? execution.ExchangeTradeId
+                    : position.OpenFills[0].PositionId;
                 AddOpenFill(
                     position, metrics, executionKey, execution.ExecutedAtUtc,
-                    direction, remainingQuantity, exposure);
+                    direction, remainingQuantity, exposure, positionId);
                 continue;
             }
 
@@ -303,9 +324,9 @@ public static class PerformanceCalculator
                 var openFill = position.OpenFills[0];
                 var matchedQuantity = Math.Min(remainingQuantity, openFill.RemainingQuantity);
                 var closeMetrics = GetMetrics(metrics, executionKey);
-                closeMetrics.EntryTimeUtc ??= openFill.EntryTimeUtc;
+                closeMetrics.SetPositionDuration(openFill.EntryTimeUtc, execution.ExecutedAtUtc);
+                closeMetrics.PositionId ??= openFill.PositionId;
                 closeMetrics.IsPositionExit = true;
-                closeMetrics.AddDuration(openFill.EntryTimeUtc, execution.ExecutedAtUtc, matchedQuantity);
                 closeMetrics.AddExposure(openFill.ExposureMultiple, matchedQuantity);
                 GetMetrics(metrics, openFill.Key)
                     .AddDuration(openFill.EntryTimeUtc, execution.ExecutedAtUtc, matchedQuantity);
@@ -321,7 +342,8 @@ public static class PerformanceCalculator
             {
                 AddOpenFill(
                     position, metrics, executionKey, execution.ExecutedAtUtc,
-                    direction, remainingQuantity, exposure);
+                    direction, remainingQuantity, exposure,
+                    $"{execution.ExchangeTradeId}:reversal");
             }
         }
 
@@ -341,10 +363,12 @@ public static class PerformanceCalculator
         DateTime entryTimeUtc,
         int direction,
         decimal quantity,
-        decimal? exposureMultiple)
+        decimal? exposureMultiple,
+        string positionId)
     {
         var executionMetrics = GetMetrics(metrics, executionKey);
         executionMetrics.EntryTimeUtc ??= entryTimeUtc;
+        executionMetrics.PositionId ??= positionId;
         executionMetrics.IsPositionEntry = true;
         executionMetrics.AddExposure(exposureMultiple, quantity);
         position.OpenFills.Add(new OpenFill
@@ -353,6 +377,7 @@ public static class PerformanceCalculator
             EntryTimeUtc = entryTimeUtc,
             Direction = direction,
             RemainingQuantity = quantity,
+            PositionId = positionId,
             ExposureMultiple = exposureMultiple
         });
     }

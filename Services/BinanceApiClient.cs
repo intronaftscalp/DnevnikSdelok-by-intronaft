@@ -61,6 +61,37 @@ public sealed class BinanceApiClient : IDisposable
         return ParseDecimal(usdt.GetProperty("free")) + ParseDecimal(usdt.GetProperty("locked"));
     }
 
+    public async Task<IReadOnlyDictionary<string, ExecutionOrderMetadata>> GetExecutionOrderMetadataAsync(
+        string symbol,
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken)
+    {
+        var metadata = new Dictionary<string, ExecutionOrderMetadata>(StringComparer.Ordinal);
+        var start = fromUtc.AddMilliseconds(-1);
+        var end = toUtc.AddMilliseconds(1);
+        await FetchExecutionOrderMetadataWindowAsync(
+            symbol, start, end, metadata, 0, cancellationToken);
+        return metadata;
+    }
+
+    public async Task<string> GetOrderTypeAsync(
+        string symbol,
+        string orderId,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = _market == "spot" ? "/api/v3/order" : "/fapi/v1/order";
+        var query = $"symbol={Uri.EscapeDataString(symbol)}" +
+                    $"&orderId={Uri.EscapeDataString(orderId)}";
+        using var document = await GetSignedJsonAsync(endpoint, query, cancellationToken);
+        if (!document.RootElement.TryGetProperty("type", out var type) ||
+            string.IsNullOrWhiteSpace(type.GetString()))
+        {
+            throw new InvalidOperationException("Binance не вернула тип ордера.");
+        }
+        return type.GetString()!;
+    }
+
     public async Task<IReadOnlyList<BalanceSnapshot>> GetSpotBalanceSnapshotsAsync(
         int connectionId,
         DateTime fromUtc,
@@ -291,6 +322,52 @@ public sealed class BinanceApiClient : IDisposable
             connectionId, symbol, baseAsset, quoteAsset, midpoint.AddMilliseconds(1), to, trades, depth + 1, cancellationToken);
     }
 
+    private async Task FetchExecutionOrderMetadataWindowAsync(
+        string symbol,
+        DateTime fromUtc,
+        DateTime toUtc,
+        Dictionary<string, ExecutionOrderMetadata> metadata,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        var endpoint = _market == "spot" ? "/api/v3/myTrades" : "/fapi/v1/userTrades";
+        var parameters = $"symbol={Uri.EscapeDataString(symbol)}" +
+                         $"&startTime={new DateTimeOffset(fromUtc).ToUnixTimeMilliseconds()}" +
+                         $"&endTime={new DateTimeOffset(toUtc).ToUnixTimeMilliseconds()}" +
+                         "&limit=1000";
+        using var document = await GetSignedJsonAsync(endpoint, parameters, cancellationToken);
+        var rows = document.RootElement.EnumerateArray().ToList();
+        if (rows.Count == 1000)
+        {
+            if (depth >= 18 || (toUtc - fromUtc).TotalMilliseconds < 2)
+            {
+                throw new InvalidOperationException(
+                    $"Для {symbol} слишком много исполнений в коротком интервале, чтобы определить типы ордеров.");
+            }
+
+            var midpoint = fromUtc.AddTicks((toUtc - fromUtc).Ticks / 2);
+            await FetchExecutionOrderMetadataWindowAsync(
+                symbol, fromUtc, midpoint, metadata, depth + 1, cancellationToken);
+            await FetchExecutionOrderMetadataWindowAsync(
+                symbol, midpoint.AddMilliseconds(1), toUtc, metadata, depth + 1, cancellationToken);
+            return;
+        }
+
+        foreach (var row in rows)
+        {
+            var tradeId = row.GetProperty("id").ToString();
+            var orderId = row.GetProperty("orderId").ToString();
+            var makerProperty = _market == "spot" ? "isMaker" : "maker";
+            if (!row.TryGetProperty(makerProperty, out var maker))
+            {
+                throw new InvalidOperationException(
+                    $"Binance не вернула признак maker для исполнения {tradeId}.");
+            }
+
+            metadata[tradeId] = new ExecutionOrderMetadata(orderId, maker.GetBoolean());
+        }
+    }
+
     private async Task<int> FetchFuturesExecutionsAsync(
         int connectionId,
         DateTime from,
@@ -449,6 +526,8 @@ public sealed class BinanceApiClient : IDisposable
         {
             ConnectionId = connectionId,
             ExchangeTradeId = row.GetProperty("id").ToString(),
+            ExchangeOrderId = row.GetProperty("orderId").ToString(),
+            IsMaker = row.GetProperty("isMaker").GetBoolean(),
             Symbol = symbol,
             BaseAsset = baseAsset,
             QuoteAsset = quoteAsset,
@@ -477,6 +556,8 @@ public sealed class BinanceApiClient : IDisposable
         {
             ConnectionId = connectionId,
             ExchangeTradeId = row.GetProperty("id").ToString(),
+            ExchangeOrderId = row.GetProperty("orderId").ToString(),
+            IsMaker = row.GetProperty("maker").GetBoolean(),
             Symbol = symbol,
             BaseAsset = FindBaseAsset(symbol),
             QuoteAsset = "USDT",
@@ -497,6 +578,8 @@ public sealed class BinanceApiClient : IDisposable
                 row.GetProperty("time").GetInt64()).UtcDateTime
         };
     }
+
+    public sealed record ExecutionOrderMetadata(string ExchangeOrderId, bool IsMaker);
 
     private static string FindBaseAsset(string symbol)
     {

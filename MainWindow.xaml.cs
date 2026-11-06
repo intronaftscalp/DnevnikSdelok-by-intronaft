@@ -23,6 +23,10 @@ public partial class MainWindow : Window
     private readonly JournalDatabase _database;
     private readonly DispatcherTimer _syncTimer = new() { Interval = TimeSpan.FromMinutes(15) };
     private readonly ObservableCollection<ExecutionRow> _rows = [];
+    private readonly ObservableCollection<ExecutionRow> _pageRows = [];
+    private readonly List<ExecutionRow> _executionRows = [];
+    private readonly HashSet<string> _selectedPositionKeys = new(StringComparer.Ordinal);
+    private readonly ObservableCollection<ExecutionRow> _noteRows = [];
     private readonly Dictionary<string, (TextBlock Value, TextBlock Caption)> _statWidgets = [];
     private readonly Dictionary<DataGridColumn, string> _columnIds = [];
     private ICollectionView? _executionView;
@@ -32,15 +36,29 @@ public partial class MainWindow : Window
     private List<PerformancePoint> _chartPoints = [];
     private Canvas? _mainChart;
     private DataGrid? _tradesGrid;
-    private Border? _tradesWidgetCard;
     private TradeDetailsPanel? _expandedTradeDetails;
     private TextBlock? _tradesEmptyState;
     private ComboBox? _connectionFilter;
     private ComboBox? _periodFilter;
     private TextBox? _searchBox;
+    private Button RemoveConnectionButton = null!;
+    private Button? _bulkEditButton;
+    private Popup? _bulkEditPopup;
+    private TextBox? _bulkCategoryBox;
+    private TextBox? _bulkEntryReasonBox;
+    private TextBox? _bulkRatingBox;
+    private TextBox? _bulkNoteBox;
+    private StackPanel? _summaryPanel;
+    private TextBlock? _pageRangeText;
+    private TextBlock? _resultRangeText;
+    private TextBlock? _pageNumberText;
+    private ComboBox? _pageSizeSelector;
+    private int _currentPage;
+    private int _pageSize = 200;
+    private string? _sortProperty = nameof(ExecutionRow.PositionSortTimeUtc);
+    private ListSortDirection _sortDirection = ListSortDirection.Descending;
     private CancellationTokenSource? _activeSync;
     private ExecutionRow? _expandedExecution;
-    private double? _tradesCardHeightBeforeExpansion;
     private DashboardSettingsWindow? _settingsWindow;
     private Point? _widgetDragStart;
     private bool _isSyncing;
@@ -63,6 +81,7 @@ public partial class MainWindow : Window
         _database = database;
         InitializeComponent();
         _preferences = _database.GetDashboardPreferences();
+        _preferences.EnsureCatalog();
         _database.SaveDashboardPreferences(_preferences);
         _syncTimer.Tick += SyncTimerTick;
         StatusText.ToolTip = _database.DatabasePath;
@@ -73,7 +92,6 @@ public partial class MainWindow : Window
     {
         ApplyTheme();
         BuildDashboardWidgets();
-        HeaderBand.Visibility = _preferences.ShowHeader ? Visibility.Visible : Visibility.Collapsed;
         ReloadData();
         if (Environment.GetCommandLineArgs().Contains("--offline", StringComparer.Ordinal))
         {
@@ -324,7 +342,7 @@ public partial class MainWindow : Window
                 .Where(item => item.HasValue)
                 .Max();
             SetSyncStatus("Актуально", lastSync.HasValue
-                ? lastSync.Value.ToLocalTime().ToString("dd.MM.yyyy HH:mm")
+                ? ToDisplayTime(lastSync.Value).ToString("dd.MM.yyyy HH:mm")
                 : "Синхронизация завершена");
             StatusText.Text = automatic
                 ? "Автообновление каждые 15 минут · данные и настройки хранятся локально."
@@ -363,8 +381,10 @@ public partial class MainWindow : Window
         var notes = _database.GetExecutionNotes();
         _expandedExecution = null;
         _rows.Clear();
+        _executionRows.Clear();
         foreach (var row in _summary.Rows)
         {
+            row.TimeZoneId = _preferences.TimeZoneId;
             if (notes.TryGetValue(
                     (row.ConnectionId, row.Symbol, row.Execution.ExchangeTradeId),
                     out var note))
@@ -379,26 +399,40 @@ public partial class MainWindow : Window
                 row.JournalConclusion = note.JournalConclusion;
                 row.VideoUrl = note.VideoUrl;
                 row.ScreenshotRelativePath = note.ScreenshotRelativePath;
+                row.ScreenshotRelativePaths = note.ScreenshotRelativePaths;
                 row.ChartDrawingsJson = note.ChartDrawingsJson;
             }
+            _executionRows.Add(row);
+        }
+        foreach (var row in AggregatePositions(_executionRows))
+        {
             _rows.Add(row);
         }
+        _noteRows.Clear();
+        foreach (var row in _rows.Where(item =>
+                     !string.IsNullOrWhiteSpace(item.JournalDescription) ||
+                     !string.IsNullOrWhiteSpace(item.JournalConclusion)))
+        {
+            _noteRows.Add(row);
+        }
+        NotesGrid.ItemsSource = _noteRows;
 
         if (_tradesGrid is not null)
         {
             _executionView = CollectionViewSource.GetDefaultView(_rows);
             _executionView.Filter = IsExecutionVisible;
-            _tradesGrid.ItemsSource = _executionView;
+            SetDefaultTradeSort();
+            ApplyTradePage();
         }
+        ConfigureConnectionFilter();
         UpdateDashboardValues();
         UpdateRemoveButton();
     }
 
     private void BuildDashboardWidgets()
     {
-        _tradesWidgetCard = null;
+        CollapseExpandedTrade();
         _expandedTradeDetails = null;
-        _tradesCardHeightBeforeExpansion = null;
         DashboardWidgets.Children.Clear();
         _statWidgets.Clear();
         _mainChart = null;
@@ -411,25 +445,27 @@ public partial class MainWindow : Window
 
         var availableWidth = Math.Max(900, DashboardScrollViewer.ActualWidth);
         foreach (var widget in _preferences.Widgets
-                     .Where(item => item.Visible)
+                     .Where(item => item.Visible && item.Id != "trades")
                      .OrderBy(item => item.OrderIndex))
         {
             var card = CreateWidgetCard(widget, availableWidth);
             DashboardWidgets.Children.Add(card);
         }
 
+        BuildTradesPage();
         if (_tradesGrid is not null)
         {
             _executionView = CollectionViewSource.GetDefaultView(_rows);
             _executionView.Filter = IsExecutionVisible;
-            _tradesGrid.ItemsSource = _executionView;
+            SetDefaultTradeSort();
+            ApplyTradePage();
         }
         UpdateDashboardValues();
     }
 
     private Border CreateWidgetCard(WidgetPreference widget, double availableWidth)
     {
-        var minimumWidth = widget.Id == "trades" ? 980 : 240;
+        var minimumWidth = 240;
         var maximumWidth = Math.Max(minimumWidth, availableWidth - 24);
         var width = Math.Min(widget.CustomWidth ?? WidgetWidth(widget.Width, availableWidth), maximumWidth);
         var contentHeight = widget.CustomHeight is > 0
@@ -437,7 +473,7 @@ public partial class MainWindow : Window
             : widget.Height switch
         {
             "medium" => 210,
-            "large" => widget.Id == "trades" ? 470 : 330,
+            "large" => 330,
             _ => 120
         };
         var cardHeight = widget.CustomHeight ?? contentHeight + 48;
@@ -457,12 +493,6 @@ public partial class MainWindow : Window
         };
         card.Drop += WidgetDrop;
         card.DragOver += DashboardDragOver;
-        if (widget.Id == "trades")
-        {
-            _tradesWidgetCard = card;
-            card.SizeChanged += (_, _) => UpdateExpandedDetailsWidth();
-        }
-
         var panel = new DockPanel();
         var header = new DockPanel { LastChildFill = true, Margin = new Thickness(0, 0, 0, 10) };
         var tools = new StackPanel { Orientation = Orientation.Horizontal };
@@ -574,7 +604,7 @@ public partial class MainWindow : Window
         };
         resizeGrip.DragDelta += (_, args) =>
         {
-            var minimumWidgetWidth = widget.Id == "trades" ? 840 : 240;
+            var minimumWidgetWidth = 240;
             var maximumWidgetWidth = Math.Max(minimumWidgetWidth, DashboardScrollViewer.ActualWidth - 24);
             var newWidth = Math.Clamp(
                 card.Width + args.HorizontalChange,
@@ -630,7 +660,6 @@ public partial class MainWindow : Window
             "sync" => CreateStatWidget(widget, "Ожидание", "Последнее обновление", out var syncRefs)
                 .Also(_ => _statWidgets["sync"] = syncRefs),
             "chart" => CreateChartWidget(widget, height),
-            "trades" => CreateTradesWidget(widget, height),
             _ => new TextBlock { Text = "Неизвестный виджет", Foreground = Brush(widget.Foreground) }
         };
     }
@@ -672,13 +701,28 @@ public partial class MainWindow : Window
         return _mainChart;
     }
 
-    private FrameworkElement CreateTradesWidget(WidgetPreference widget, double height)
+    private void BuildTradesPage()
+    {
+        TradesPage.Children.Clear();
+        var widget = new WidgetPreference
+        {
+            Id = "trades",
+            Title = "Мои сделки",
+            Background = _preferences.WindowBackground,
+            Foreground = _preferences.Foreground,
+            Accent = _preferences.AccentColor
+        };
+        TradesPage.Children.Add(CreateTradesWidget(widget));
+    }
+
+    private FrameworkElement CreateTradesWidget(WidgetPreference widget)
     {
         var grid = new Grid();
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
         grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
         grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        var toolbar = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+        grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        var toolbar = new DockPanel { Margin = new Thickness(0, 0, 0, 8), LastChildFill = false };
         var filters = new StackPanel { Orientation = Orientation.Horizontal };
         _searchBox = new TextBox
         {
@@ -688,7 +732,13 @@ public partial class MainWindow : Window
             Margin = new Thickness(0, 0, 8, 0),
             ToolTip = "Поиск по паре, рынку или направлению"
         };
-        _searchBox.TextChanged += (_, _) => _executionView?.Refresh();
+        _searchBox.TextChanged += (_, _) =>
+        {
+            _currentPage = 0;
+            _executionView?.Refresh();
+            ApplyTradePage();
+        };
+        DockPanel.SetDock(filters, Dock.Left);
         filters.Children.Add(_searchBox);
         _connectionFilter = new ComboBox
         {
@@ -708,22 +758,69 @@ public partial class MainWindow : Window
         _periodFilter.SelectionChanged += FilterChanged;
         filters.Children.Add(_periodFilter);
         toolbar.Children.Add(filters);
+        var actions = new StackPanel { Orientation = Orientation.Horizontal };
+        RemoveConnectionButton = new Button
+        {
+            Content = "Удалить подключение",
+            Padding = new Thickness(10, 5, 10, 5),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 8, 0),
+            Visibility = Visibility.Collapsed
+        };
+        RemoveConnectionButton.Click += RemoveConnectionClick;
+        actions.Children.Add(RemoveConnectionButton);
+        var settingsButton = new Button
+        {
+            Content = "⚙  Настройки",
+            Padding = new Thickness(10, 5, 10, 5),
+            FontSize = 11
+        };
+        settingsButton.Click += SettingsClick;
+        actions.Children.Add(settingsButton);
+        _bulkEditButton = new Button
+        {
+            Content = "Изменить выбранное",
+            Padding = new Thickness(10, 5, 10, 5),
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 8, 0),
+            Visibility = Visibility.Collapsed
+        };
+        _bulkEditButton.Click += (_, _) =>
+        {
+            if (_bulkEditPopup is not null)
+            {
+                _bulkEditPopup.IsOpen = true;
+            }
+        };
+        actions.Children.Insert(0, _bulkEditButton);
+        _bulkEditPopup = CreateBulkEditPopup(_bulkEditButton);
+        grid.Children.Add(_bulkEditPopup);
+        DockPanel.SetDock(actions, Dock.Right);
+        toolbar.Children.Add(actions);
         Grid.SetRow(toolbar, 0);
         grid.Children.Add(toolbar);
 
         var tableHost = new Grid();
         _tradesGrid = new DataGrid
         {
+            AutoGenerateColumns = false,
             AlternationCount = 2,
             Background = Brush(widget.Background),
             Foreground = Brush(widget.Foreground),
             ColumnHeaderStyle = CreateColumnHeaderStyle(widget),
             RowBackground = Brush(widget.Background),
             AlternatingRowBackground = Brush(Blend(widget.Background, widget.Foreground, 0.035)),
+            SelectionUnit = DataGridSelectionUnit.FullRow,
+            SelectionMode = DataGridSelectionMode.Single,
+            CanUserAddRows = false,
             IsReadOnly = false,
             RowDetailsVisibilityMode = DataGridRowDetailsVisibilityMode.Collapsed,
+            RowStyle = CreateTradeRowStyle(widget),
             ItemsSource = _rows
         };
+        _tradesGrid.ItemsSource = _pageRows;
+        var selectColumn = CreateSelectionColumn();
+        _tradesGrid.Columns.Add(selectColumn);
         foreach (var preference in _preferences.Columns.Where(item => item.Visible).OrderBy(item => item.Order))
         {
             var column = CreateColumn(preference);
@@ -734,6 +831,15 @@ public partial class MainWindow : Window
             _tradesGrid.Columns.Add(column);
         }
         _tradesGrid.ColumnReordered += (_, _) => PersistColumnLayout();
+        _tradesGrid.Sorting += TradesGridSorting;
+        _tradesGrid.ItemsSource = _pageRows;
+        _tradesGrid.LoadingRow += (_, args) =>
+        {
+            if (args.Row.Item is ExecutionRow row)
+            {
+                row.IsSelected = _selectedPositionKeys.Contains(row.PositionKey);
+            }
+        };
         _tradesGrid.PreviewMouseLeftButtonUp += TradesGridPreviewMouseLeftButtonUp;
         _tradesGrid.CellEditEnding += TradesGridCellEditEnding;
         _tradesGrid.SelectionChanged += (_, _) => UpdateRemoveButton();
@@ -762,8 +868,297 @@ public partial class MainWindow : Window
         _expandedTradeDetails.CollapseRequested += CollapseTradeDetails;
         Grid.SetRow(_expandedTradeDetails, 2);
         grid.Children.Add(_expandedTradeDetails);
+        var footer = CreateTradesFooter();
+        Grid.SetRow(footer, 3);
+        grid.Children.Add(footer);
         ConfigureConnectionFilter();
         return grid;
+    }
+
+    private DataGridTemplateColumn CreateSelectionColumn()
+    {
+        var checkBox = new FrameworkElementFactory(typeof(CheckBox));
+        checkBox.SetValue(FrameworkElement.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        checkBox.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        checkBox.SetBinding(ToggleButton.IsCheckedProperty, new Binding(nameof(ExecutionRow.IsSelected))
+        {
+            Mode = BindingMode.TwoWay,
+            UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+        });
+        checkBox.AddHandler(
+            ToggleButton.CheckedEvent,
+            new RoutedEventHandler((sender, _) =>
+            {
+                if (sender is FrameworkElement { DataContext: ExecutionRow row })
+                {
+                    row.IsSelected = true;
+                    _selectedPositionKeys.Add(row.PositionKey);
+                    UpdateSelectionSummary();
+                }
+            }));
+        checkBox.AddHandler(
+            ToggleButton.UncheckedEvent,
+            new RoutedEventHandler((sender, _) =>
+            {
+                if (sender is FrameworkElement { DataContext: ExecutionRow row })
+                {
+                    row.IsSelected = false;
+                    _selectedPositionKeys.Remove(row.PositionKey);
+                    UpdateSelectionSummary();
+                }
+            }));
+        return new DataGridTemplateColumn
+        {
+            Header = "",
+            Width = 42,
+            CanUserSort = false,
+            CanUserReorder = false,
+            CellTemplate = new DataTemplate { VisualTree = checkBox }
+        };
+    }
+
+    private FrameworkElement CreateTradesFooter()
+    {
+        var footer = new Border
+        {
+            Background = Brush("#050905"),
+            BorderBrush = Brush(_preferences.ChartGridColor),
+            BorderThickness = new Thickness(1, 1, 1, 0),
+            Padding = new Thickness(10, 7, 8, 7),
+            Margin = new Thickness(0, 4, 0, 0)
+        };
+        var layout = new Grid();
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        layout.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        var left = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+        left.Children.Add(new TextBlock
+        {
+            Text = "Сделок:",
+            Foreground = Brush(_preferences.MutedForeground),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 4, 0)
+        });
+        _pageRangeText = new TextBlock
+        {
+            Foreground = Brush(_preferences.Foreground),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        left.Children.Add(_pageRangeText);
+        Grid.SetColumn(left, 0);
+        layout.Children.Add(left);
+        _summaryPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(18, 0, 12, 0)
+        };
+        Grid.SetColumn(_summaryPanel, 1);
+        layout.Children.Add(_summaryPanel);
+
+        var paging = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var previous = new Button { Content = "‹", Width = 30, Height = 26, Padding = new Thickness(2) };
+        previous.Click += (_, _) =>
+        {
+            if (_currentPage > 0)
+            {
+                _currentPage--;
+                ApplyTradePage();
+            }
+        };
+        paging.Children.Add(previous);
+        _resultRangeText = new TextBlock
+        {
+            Foreground = Brush(_preferences.MutedForeground),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(4, 0, 8, 0)
+        };
+        paging.Children.Add(_resultRangeText);
+        _pageNumberText = new TextBlock
+        {
+            Foreground = Brush(_preferences.Foreground),
+            VerticalAlignment = VerticalAlignment.Center,
+            MinWidth = 48,
+            TextAlignment = TextAlignment.Center
+        };
+        paging.Children.Add(_pageNumberText);
+        var next = new Button { Content = "›", Width = 30, Height = 26, Padding = new Thickness(2) };
+        next.Click += (_, _) =>
+        {
+            _currentPage++;
+            ApplyTradePage();
+        };
+        paging.Children.Add(next);
+        _pageSizeSelector = new ComboBox
+        {
+            Width = 92,
+            Height = 29,
+            Margin = new Thickness(8, 0, 0, 0),
+            ItemsSource = new[] { "20 / стр", "50 / стр", "100 / стр", "150 / стр", "200 / стр", "Все" },
+            SelectedItem = "200 / стр"
+        };
+        _pageSizeSelector.SelectionChanged += (_, _) =>
+        {
+            if (_pageSizeSelector.SelectedItem is string sizeText)
+            {
+                _pageSize = int.TryParse(
+                    sizeText.Split(' ')[0],
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var size)
+                    ? size
+                    : 0;
+                _currentPage = 0;
+                ApplyTradePage();
+            }
+        };
+        paging.Children.Add(_pageSizeSelector);
+        Grid.SetColumn(paging, 2);
+        layout.Children.Add(paging);
+        footer.Child = layout;
+        return footer;
+    }
+
+    private Popup CreateBulkEditPopup(Button placementTarget)
+    {
+        var panel = new StackPanel { Width = 350, Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Массовое редактирование",
+            FontSize = 15,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = Brush(_preferences.Foreground),
+            Margin = new Thickness(0, 0, 0, 10)
+        });
+        _bulkCategoryBox = AddBulkEditField(panel, "Категория");
+        _bulkEntryReasonBox = AddBulkEditField(panel, "Причина входа");
+        _bulkRatingBox = AddBulkEditField(panel, "Рейтинг");
+        _bulkNoteBox = AddBulkEditField(panel, "Заметка");
+        var apply = new Button
+        {
+            Content = "Применить к выбранным сделкам",
+            Margin = new Thickness(0, 8, 0, 0)
+        };
+        apply.Click += ApplyBulkEditClick;
+        panel.Children.Add(apply);
+        return new Popup
+        {
+            PlacementTarget = placementTarget,
+            Placement = PlacementMode.Bottom,
+            StaysOpen = false,
+            AllowsTransparency = true,
+            Child = new Border
+            {
+                Background = Brush("#050905"),
+                BorderBrush = Brush(_preferences.ChartGridColor),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Child = panel
+            }
+        };
+    }
+
+    private TextBox AddBulkEditField(Panel panel, string label)
+    {
+        panel.Children.Add(new TextBlock
+        {
+            Text = label,
+            Foreground = Brush(_preferences.MutedForeground),
+            Margin = new Thickness(0, 5, 0, 3)
+        });
+        var field = new TextBox { Height = 34, VerticalContentAlignment = VerticalAlignment.Center };
+        panel.Children.Add(field);
+        return field;
+    }
+
+    private void ApplyBulkEditClick(object sender, RoutedEventArgs e)
+    {
+        var selected = _rows
+            .Where(row => _selectedPositionKeys.Contains(GetPositionKey(row)))
+            .ToList();
+        if (selected.Count == 0)
+        {
+            return;
+        }
+
+        var category = _bulkCategoryBox?.Text.Trim() ?? "";
+        var entryReason = _bulkEntryReasonBox?.Text.Trim() ?? "";
+        var rating = _bulkRatingBox?.Text.Trim() ?? "";
+        var note = _bulkNoteBox?.Text.Trim() ?? "";
+        if (string.IsNullOrEmpty(category) &&
+            string.IsNullOrEmpty(entryReason) &&
+            string.IsNullOrEmpty(rating) &&
+            string.IsNullOrEmpty(note))
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var row in selected)
+            {
+                if (!string.IsNullOrEmpty(category))
+                {
+                    row.Category = category;
+                }
+                if (!string.IsNullOrEmpty(entryReason))
+                {
+                    row.EntryReason = entryReason;
+                }
+                if (!string.IsNullOrEmpty(rating))
+                {
+                    row.Rating = rating;
+                }
+                if (!string.IsNullOrEmpty(note))
+                {
+                    row.JournalDescription = note;
+                }
+                _database.SaveExecutionNote(row);
+            }
+
+            _bulkCategoryBox!.Clear();
+            _bulkEntryReasonBox!.Clear();
+            _bulkRatingBox!.Clear();
+            _bulkNoteBox!.Clear();
+            _bulkEditPopup!.IsOpen = false;
+            ReloadData();
+        }
+        catch (Exception exception)
+        {
+            MessageBox.Show(this,
+                $"Не удалось применить заметки ко всем выбранным сделкам: {exception.Message}",
+                "Ошибка массового редактирования",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private static string GetPositionKey(ExecutionRow row) =>
+        string.IsNullOrEmpty(row.PositionKey)
+            ? $"{row.ConnectionId}:{row.Symbol}:{row.Execution.Market}:{row.PositionId ?? row.Execution.ExchangeTradeId}"
+            : row.PositionKey;
+
+    private Style CreateTradeRowStyle(WidgetPreference widget)
+    {
+        var style = new Style(typeof(DataGridRow));
+        style.Setters.Add(new Setter(Control.BackgroundProperty, Brush(widget.Background)));
+        style.Setters.Add(new Setter(Control.ForegroundProperty, Brush(widget.Foreground)));
+        style.Setters.Add(new Setter(Control.BorderThicknessProperty, new Thickness(0, 0, 0, 1)));
+        style.Setters.Add(new Setter(Control.BorderBrushProperty, Brush(_preferences.ChartGridColor)));
+        var selected = new Trigger
+        {
+            Property = DataGridRow.IsSelectedProperty,
+            Value = true
+        };
+        selected.Setters.Add(new Setter(Control.BackgroundProperty, Brush("#073512")));
+        selected.Setters.Add(new Setter(Control.ForegroundProperty, Brush("#00FF41")));
+        selected.Setters.Add(new Setter(Control.BorderBrushProperty, Brush("#00FF41")));
+        style.Triggers.Add(selected);
+        return style;
     }
 
     private Style CreateColumnHeaderStyle(WidgetPreference widget)
@@ -783,6 +1178,10 @@ public partial class MainWindow : Window
         if (definition is null)
         {
             return null;
+        }
+        if (preference.Id is "percent" or "profitPercent")
+        {
+            return CreateProfitPercentColumn(preference, definition);
         }
         if (preference.Id == "ticker")
         {
@@ -840,8 +1239,11 @@ public partial class MainWindow : Window
         var sortProperty = preference.Id switch
         {
             "entry" => nameof(ExecutionRow.EntryTimeUtc),
+            "percent" or "profitPercent" => nameof(ExecutionRow.ProfitPercentValue),
             "depositPercent" => nameof(ExecutionRow.ExposureMultiple),
             "inDeal" => nameof(ExecutionRow.TimeInDeal),
+            "profitUsd" or "incomeUsd" => nameof(ExecutionRow.NetPnl),
+            "volume" or "turnover" => nameof(ExecutionRow.PositionVolume),
             _ => property
         };
         var column = new DataGridTextColumn
@@ -862,6 +1264,61 @@ public partial class MainWindow : Window
         return column;
     }
 
+    private DataGridTemplateColumn CreateProfitPercentColumn(
+        ColumnPreference preference,
+        TradeColumnDefinition definition)
+    {
+        var text = new FrameworkElementFactory(typeof(TextBlock));
+        text.SetBinding(TextBlock.TextProperty, new Binding(nameof(ExecutionRow.ProfitPercentDisplay)));
+        text.SetValue(TextBlock.ForegroundProperty, Brushes.White);
+        text.SetValue(TextBlock.FontWeightProperty, FontWeights.SemiBold);
+        text.SetValue(TextBlock.TextAlignmentProperty, TextAlignment.Center);
+        text.SetValue(FrameworkElement.VerticalAlignmentProperty, VerticalAlignment.Center);
+        var pill = new FrameworkElementFactory(typeof(Border));
+        pill.SetValue(Border.CornerRadiusProperty, new CornerRadius(20));
+        pill.SetValue(Border.PaddingProperty, new Thickness(9, 1, 9, 1));
+        pill.SetValue(Border.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+        pill.SetValue(Border.VerticalAlignmentProperty, VerticalAlignment.Center);
+        pill.SetValue(Border.ToolTipProperty, "Процент изменения от средней цены входа к средней цене выхода.");
+        pill.AppendChild(text);
+        var style = new Style(typeof(Border));
+        style.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#006B16")));
+        style.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#00D52E")));
+        style.Setters.Add(new Setter(Border.BorderThicknessProperty, new Thickness(1)));
+        var negative = new DataTrigger
+        {
+            Binding = new Binding(nameof(ExecutionRow.IsProfitPositive)),
+            Value = false
+        };
+        negative.Setters.Add(new Setter(Border.BackgroundProperty, Brush("#790B0B")));
+        negative.Setters.Add(new Setter(Border.BorderBrushProperty, Brush("#FF3030")));
+        style.Triggers.Add(negative);
+        pill.SetValue(FrameworkElement.StyleProperty, style);
+
+        var column = new DataGridTemplateColumn
+        {
+            Header = new TextBlock
+            {
+                Text = definition.Title,
+                ToolTip = "Процент изменения от средней точки входа к средней точке выхода."
+            },
+            SortMemberPath = nameof(ExecutionRow.ProfitPercentValue),
+            Width = new DataGridLength(preference.Width),
+            CellStyle = new Style(typeof(DataGridCell))
+            {
+                Setters =
+                {
+                    new Setter(Control.PaddingProperty, new Thickness(4, 0, 4, 0)),
+                    new Setter(Control.VerticalContentAlignmentProperty, VerticalAlignment.Center),
+                    new Setter(Control.HorizontalContentAlignmentProperty, HorizontalAlignment.Center)
+                }
+            },
+            CellTemplate = new DataTemplate { VisualTree = pill }
+        };
+        _columnIds[column] = preference.Id;
+        return column;
+    }
+
     private void TradesGridCellEditEnding(object? sender, DataGridCellEditEndingEventArgs e)
     {
         if (e.EditAction != DataGridEditAction.Commit || e.Row.Item is not ExecutionRow row)
@@ -874,7 +1331,7 @@ public partial class MainWindow : Window
             try
             {
                 _database.SaveExecutionNote(row);
-                StatusText.Text = $"Заметка к {row.Symbol} сохранена локально.";
+                ReloadData();
             }
             catch (Exception exception)
             {
@@ -882,6 +1339,150 @@ public partial class MainWindow : Window
                     "Ошибка сохранения", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }, DispatcherPriority.Background);
+    }
+
+    private void TradesGridSorting(object? sender, DataGridSortingEventArgs e)
+    {
+        e.Handled = true;
+        var property = e.Column.SortMemberPath;
+        if (string.IsNullOrEmpty(property))
+        {
+            return;
+        }
+
+        _sortDirection = _sortProperty == property &&
+                         _sortDirection == ListSortDirection.Ascending
+            ? ListSortDirection.Descending
+            : ListSortDirection.Ascending;
+        _sortProperty = property;
+        foreach (var column in _tradesGrid!.Columns)
+        {
+            column.SortDirection = null;
+        }
+        e.Column.SortDirection = _sortDirection;
+        if (_executionView is not null)
+        {
+            _executionView.SortDescriptions.Clear();
+            _executionView.SortDescriptions.Add(new SortDescription(property, _sortDirection));
+        }
+        _currentPage = 0;
+        ApplyTradePage();
+    }
+
+    private void ApplyTradePage()
+    {
+        if (_executionView is null)
+        {
+            return;
+        }
+
+        var filtered = _executionView.Cast<ExecutionRow>().ToList();
+        var pageCount = _pageSize == 0
+            ? 1
+            : Math.Max(1, (int)Math.Ceiling(filtered.Count / (double)_pageSize));
+        _currentPage = Math.Clamp(_currentPage, 0, pageCount - 1);
+        var page = _pageSize == 0
+            ? filtered
+            : filtered.Skip(_currentPage * _pageSize).Take(_pageSize).ToList();
+        _pageRows.Clear();
+        foreach (var row in page)
+        {
+            row.IsSelected = _selectedPositionKeys.Contains(row.PositionKey);
+            _pageRows.Add(row);
+        }
+
+        _pageRangeText!.Text = _selectedPositionKeys.Count > 0
+            ? _selectedPositionKeys.Count.ToString(CultureInfo.InvariantCulture)
+            : page.Count.ToString(CultureInfo.InvariantCulture);
+        _pageNumberText!.Text = $"{_currentPage + 1} / {pageCount}";
+        var firstItem = filtered.Count == 0 ? 0 : _currentPage * _pageSize + 1;
+        var lastItem = _pageSize == 0
+            ? filtered.Count
+            : Math.Min(filtered.Count, (_currentPage + 1) * _pageSize);
+        _resultRangeText!.Text = $"{firstItem}–{lastItem} из {filtered.Count}";
+        UpdateSelectionSummary();
+        if (_tradesEmptyState is not null)
+        {
+            _tradesEmptyState.Visibility = filtered.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private void UpdateSelectionSummary()
+    {
+        var selectedRows = _rows
+            .Where(row => _selectedPositionKeys.Contains(row.PositionKey))
+            .ToList();
+        var summaryRows = selectedRows.Count > 0 ? selectedRows : _pageRows.ToList();
+        _bulkEditButton!.Visibility = selectedRows.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        _bulkEditButton.Content = $"Изменить выбранное ({selectedRows.Count})";
+        if (_pageRangeText is not null)
+        {
+            _pageRangeText.Text = selectedRows.Count > 0
+                ? selectedRows.Count.ToString(CultureInfo.InvariantCulture)
+                : _pageRows.Count.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (_summaryPanel is null)
+        {
+            return;
+        }
+
+        _summaryPanel.Children.Clear();
+        var orderedMetrics = _preferences.Columns
+            .Where(column => column.Visible &&
+                             column.Id is "percent" or "profitPercent" or "profitUsd" or "incomeUsd" or "commission" or "funding")
+            .OrderBy(column => column.Order)
+            .ToList();
+        foreach (var metric in orderedMetrics)
+        {
+            switch (metric.Id)
+            {
+                case "percent":
+                case "profitPercent":
+                    var percentages = summaryRows.Where(row => row.ProfitPercentValue.HasValue).ToList();
+                    var denominator = percentages.Sum(row => row.PositionEntryQuoteQuantity ?? 0);
+                    var percent = denominator > 0
+                        ? percentages.Sum(row => row.ProfitPercentValue!.Value *
+                                                 (row.PositionEntryQuoteQuantity ?? 0)) / denominator
+                        : (decimal?)null;
+                    AddFooterValue(
+                        $"{metric.Title}: {(percent.HasValue ? $"{percent.Value.ToString("0.####", CultureInfo.GetCultureInfo("ru-RU"))}%" : "—")}",
+                        percent.GetValueOrDefault() >= 0);
+                    break;
+                case "profitUsd":
+                case "incomeUsd":
+                    var pnl = summaryRows.Sum(row => row.NetPnl ?? 0);
+                    AddFooterValue(
+                        $"{metric.Title}: {pnl.ToString("0.####", CultureInfo.GetCultureInfo("ru-RU"))} USDT",
+                        pnl >= 0);
+                    break;
+                case "commission":
+                    var commission = summaryRows.Sum(row => row.Commission);
+                    AddFooterValue(
+                        $"{metric.Title}: {commission.ToString("0.####", CultureInfo.GetCultureInfo("ru-RU"))}",
+                        false);
+                    break;
+                case "funding":
+                    AddFooterValue($"{metric.Title}: —", false,
+                        "История фандинга пока не загружается из Binance.");
+                    break;
+            }
+        }
+    }
+
+    private void AddFooterValue(string text, bool emphasize = false, string? tooltip = null)
+    {
+        var item = new TextBlock
+        {
+            Text = text,
+            Foreground = Brush(emphasize ? _preferences.Foreground : _preferences.MutedForeground),
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 14, 0),
+            ToolTip = tooltip
+        };
+        _summaryPanel!.Children.Add(item);
     }
 
     private void ConfigureConnectionFilter()
@@ -913,6 +1514,7 @@ public partial class MainWindow : Window
         {
             return;
         }
+
         var visible = _tradesGrid.Columns
             .OrderBy(item => item.DisplayIndex)
             .Where(_columnIds.ContainsKey)
@@ -930,6 +1532,123 @@ public partial class MainWindow : Window
             preference.Order = nextOrder++;
         }
         _database.SaveDashboardPreferences(_preferences);
+    }
+
+    private void SetDefaultTradeSort()
+    {
+        if (_executionView is null)
+        {
+            return;
+        }
+
+        _executionView.SortDescriptions.Clear();
+        _executionView.SortDescriptions.Add(
+            new SortDescription(nameof(ExecutionRow.PositionSortTimeUtc), ListSortDirection.Descending));
+    }
+
+    private static IReadOnlyList<ExecutionRow> AggregatePositions(IReadOnlyCollection<ExecutionRow> executions)
+    {
+        return executions
+            .GroupBy(row => (
+                row.ConnectionId,
+                row.Symbol,
+                row.Execution.Market,
+                LifecycleId: row.PositionId ?? $"trade:{row.Execution.ExchangeTradeId}"))
+            .Select(group =>
+            {
+                var ordered = group
+                    .OrderBy(row => row.Execution.ExecutedAtUtc)
+                    .ThenBy(row => long.TryParse(row.Execution.ExchangeTradeId, out var id) ? id : 0)
+                    .ToList();
+                var entries = ordered.Where(row => row.IsPositionEntry).ToList();
+                var exits = ordered.Where(row => row.IsPositionExit).ToList();
+                var firstEntry = entries.FirstOrDefault() ?? ordered[0];
+                var latestExecutionUtc = ordered.Max(row => row.Execution.ExecutedAtUtc);
+                var entryTimeUtc = entries
+                    .Where(row => row.EntryTimeUtc.HasValue)
+                    .Select(row => row.EntryTimeUtc!.Value)
+                    .DefaultIfEmpty(firstEntry.Execution.ExecutedAtUtc)
+                    .Min();
+                var openingSide = firstEntry.Execution.Side;
+                var openQuantity = ordered.Sum(row =>
+                {
+                    var execution = row.Execution;
+                    var quantity = execution.Quantity;
+                    if (execution.Market == "spot" &&
+                        execution.CommissionAsset == execution.BaseAsset)
+                    {
+                        quantity += execution.Side == openingSide
+                            ? execution.Side == "BUY" ? -execution.Commission : execution.Commission
+                            : execution.Side == "SELL" ? execution.Commission : -execution.Commission;
+                    }
+
+                    return execution.Side == openingSide ? quantity : -quantity;
+                });
+                var isOpen = Math.Abs(openQuantity) > 0.000000000001m;
+                var entryQuote = entries.Sum(row => row.Execution.QuoteQuantity);
+                var exitQuote = exits.Sum(row => row.Execution.QuoteQuantity);
+                var exitQuantity = exits.Sum(row => row.Execution.Quantity);
+                var commissionInQuote = ordered.Sum(row =>
+                    row.Execution.CommissionAsset == row.Execution.QuoteAsset ||
+                    row.Execution.CommissionAsset is "USDT" or "USDC" or "FDUSD"
+                        ? row.Execution.Commission
+                        : row.Execution.CommissionAsset == row.Execution.BaseAsset
+                            ? row.Execution.Commission * row.Execution.Price
+                            : 0m);
+                var exposureRows = entries.Where(row => row.ExposureMultiple.HasValue).ToList();
+                var exposureQuantity = exposureRows.Sum(row => row.Execution.Quantity);
+                var pnlRows = ordered.Where(row => row.NetPnl.HasValue).ToList();
+
+                return new ExecutionRow
+                {
+                    Execution = firstEntry.Execution,
+                    ConnectionName = firstEntry.ConnectionName,
+                    NetPnl = pnlRows.Count == 0 ? null : pnlRows.Sum(row => row.NetPnl!.Value),
+                    EntryTimeUtc = entryTimeUtc,
+                    TimeInDeal = TimeSpan.FromTicks(Math.Max(
+                        0,
+                        ((isOpen ? DateTime.UtcNow : latestExecutionUtc) - entryTimeUtc).Ticks)),
+                    ExposureMultiple = exposureQuantity > 0
+                        ? exposureRows.Sum(row => row.ExposureMultiple!.Value * row.Execution.Quantity) /
+                          exposureQuantity
+                        : null,
+                    PositionVolume = ordered.Sum(row => row.Execution.QuoteQuantity),
+                    PositionEntryQuoteQuantity = entryQuote,
+                    PositionExitQuoteQuantity = exitQuote,
+                    PositionCommission = commissionInQuote,
+                    PositionExitPrice = exitQuantity > 0
+                        ? exits.Sum(row => row.Price * row.Quantity) / exitQuantity
+                        : null,
+                    PositionPercent = entries.Count > 0 && exits.Count > 0 &&
+                                      entries.Sum(row => row.Quantity) > 0 && exitQuantity > 0
+                        ? ((exits.Sum(row => row.Price * row.Quantity) / exitQuantity -
+                            entries.Sum(row => row.Price * row.Quantity) / entries.Sum(row => row.Quantity)) /
+                           (entries.Sum(row => row.Price * row.Quantity) / entries.Sum(row => row.Quantity)) *
+                           (openingSide == "BUY" ? 1m : -1m) * 100m)
+                        : null,
+                    PositionKey = $"{firstEntry.ConnectionId}:{firstEntry.Symbol}:{firstEntry.Execution.Market}:{group.Key.LifecycleId}",
+                    IsSelected = false,
+                    PositionSortTimeUtc = latestExecutionUtc,
+                    Category = firstEntry.Category,
+                    EntryReason = firstEntry.EntryReason,
+                    ExitReason = firstEntry.ExitReason,
+                    AdditionalInfo = firstEntry.AdditionalInfo,
+                    CryptoScreener = firstEntry.CryptoScreener,
+                    Rating = firstEntry.Rating,
+                    JournalDescription = firstEntry.JournalDescription,
+                    JournalConclusion = firstEntry.JournalConclusion,
+                    VideoUrl = firstEntry.VideoUrl,
+                    ScreenshotRelativePath = firstEntry.ScreenshotRelativePath,
+                    ScreenshotRelativePaths = firstEntry.ScreenshotRelativePaths,
+                    ChartDrawingsJson = firstEntry.ChartDrawingsJson,
+                    TimeZoneId = firstEntry.TimeZoneId,
+                    IsPositionEntry = entries.Count > 0,
+                    IsPositionExit = exits.Count > 0,
+                    PositionId = firstEntry.PositionId
+                };
+            })
+            .OrderByDescending(row => row.PositionSortTimeUtc)
+            .ToList();
     }
 
     private void UpdateWidget(WidgetPreference widget, Action<WidgetPreference> update)
@@ -962,9 +1681,9 @@ public partial class MainWindow : Window
     {
         Background = Brush(_preferences.WindowBackground);
         Foreground = Brush(_preferences.Foreground);
-        HeaderBand.Visibility = _preferences.ShowHeader ? Visibility.Visible : Visibility.Collapsed;
-        HeaderBand.Background = Brush(Blend(_preferences.WindowBackground, _preferences.Foreground, 0.035));
         DashboardScrollViewer.Background = Brush(_preferences.WindowBackground);
+        MainTabs.Background = Brush(_preferences.WindowBackground);
+        TradesPage.Background = Brush(_preferences.WindowBackground);
         Resources["PanelBrush"] = Brush("#" + _preferences.WindowBackground.TrimStart('#'));
         Resources["BorderBrush"] = Brush(_preferences.ChartGridColor);
         Resources["MutedBrush"] = Brush(_preferences.MutedForeground);
@@ -984,7 +1703,7 @@ public partial class MainWindow : Window
                                    int.TryParse(selectedConnection.Tag?.ToString(), CultureInfo.InvariantCulture, out var parsedId)
             ? parsedId
             : (int?)null;
-        var rows = _rows.Where(item => item.Execution.ExecutedAtUtc >= startUtc)
+        var rows = _executionRows.Where(item => item.Execution.ExecutedAtUtc >= startUtc)
             .Where(item => !selectedConnectionId.HasValue || item.ConnectionId == selectedConnectionId.Value)
             .ToList();
         var usdtRows = rows.Where(item => item.Execution.QuoteAsset == "USDT").ToList();
@@ -1019,7 +1738,7 @@ public partial class MainWindow : Window
                 .Max();
             syncWidget.Value.Text = _connections.Count == 0 ? "Не подключено" : "Подключено";
             syncWidget.Caption.Text = latestSync.HasValue
-                ? $"Последнее обновление {latestSync.Value.ToLocalTime():dd.MM HH:mm}"
+                ? $"Последнее обновление {ToDisplayTime(latestSync.Value):dd.MM HH:mm}"
                 : "Добавьте read-only API-ключ";
         }
 
@@ -1048,6 +1767,7 @@ public partial class MainWindow : Window
         {
             _tradesEmptyState.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         }
+        ApplyTradePage();
     }
 
     private int? GetSelectedPeriod()
@@ -1169,9 +1889,10 @@ public partial class MainWindow : Window
         {
             return false;
         }
+        var positionTime = row.PositionSortTimeUtc ?? row.Execution.ExecutedAtUtc;
         if (_periodFilter?.SelectedItem is ComboBoxItem periodFilter &&
             int.TryParse(periodFilter.Tag?.ToString(), CultureInfo.InvariantCulture, out var days) &&
-            row.Execution.ExecutedAtUtc < DateTime.UtcNow.AddDays(-days))
+            positionTime < DateTime.UtcNow.AddDays(-days))
         {
             return false;
         }
@@ -1185,8 +1906,20 @@ public partial class MainWindow : Window
 
     private void FilterChanged(object sender, SelectionChangedEventArgs e)
     {
+        _currentPage = 0;
         _executionView?.Refresh();
         UpdateDashboardValues();
+    }
+
+    private void NotesGridMouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (NotesGrid.SelectedItem is not ExecutionRow row)
+        {
+            return;
+        }
+
+        MainTabs.SelectedIndex = 0;
+        OpenSymbolChart(row);
     }
 
     private void WidgetDrop(object sender, DragEventArgs e)
@@ -1452,11 +2185,6 @@ public partial class MainWindow : Window
         StatusText.Text = $"Открываю сделку {row.Symbol}…";
         grid.SelectedItem = row;
         grid.ScrollIntoView(row);
-        if (_tradesWidgetCard is not null)
-        {
-            _tradesCardHeightBeforeExpansion = _tradesWidgetCard.Height;
-            _tradesWidgetCard.Height = Math.Max(_tradesWidgetCard.Height + 680, 1180);
-        }
 
         var details = _expandedTradeDetails;
         if (details is null)
@@ -1465,18 +2193,22 @@ public partial class MainWindow : Window
             return;
         }
 
-        var relatedExecutions = _rows
+        var relatedExecutions = _executionRows
             .Where(item => item.ConnectionId == row.ConnectionId &&
-                           item.Symbol.Equals(row.Symbol, StringComparison.OrdinalIgnoreCase))
+                           item.Symbol.Equals(row.Symbol, StringComparison.OrdinalIgnoreCase) &&
+                           (row.PositionId is not null
+                               ? item.PositionId == row.PositionId
+                               : item.Execution.ExchangeTradeId == row.Execution.ExchangeTradeId) &&
+                           item.Execution.Market == row.Execution.Market)
             .OrderBy(item => item.Execution.ExecutedAtUtc)
+            .ThenBy(item => long.TryParse(item.Execution.ExchangeTradeId, out var tradeId) ? tradeId : 0)
             .ToList();
-        details.Width = Math.Max(820, (_tradesWidgetCard?.ActualWidth ?? grid.ActualWidth) - 32);
+        details.Width = Math.Max(820, grid.ActualWidth - 32);
         details.Initialize(row, relatedExecutions, _database, _preferences);
         details.Visibility = Visibility.Visible;
         Dispatcher.BeginInvoke(new Action(() =>
         {
             details.BringIntoView();
-            StatusText.Text = $"Открыта сделка {row.Symbol}. Нажмите Escape или тикер, чтобы свернуть.";
         }), DispatcherPriority.Loaded);
     }
 
@@ -1502,32 +2234,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (_tradesGrid is not null)
-        {
-            _tradesGrid.SelectedItem = null;
-        }
         _expandedExecution = null;
         if (_expandedTradeDetails is not null)
         {
             _expandedTradeDetails.Visibility = Visibility.Collapsed;
             _expandedTradeDetails.Release();
         }
-        if (_tradesWidgetCard is not null && _tradesCardHeightBeforeExpansion is double originalHeight)
-        {
-            _tradesWidgetCard.Height = originalHeight;
-        }
-        _tradesCardHeightBeforeExpansion = null;
-    }
-
-    private void UpdateExpandedDetailsWidth()
-    {
-        if (_expandedTradeDetails is null || _tradesWidgetCard is null ||
-            _tradesWidgetCard.ActualWidth <= 0)
-        {
-            return;
-        }
-
-        _expandedTradeDetails.Width = Math.Max(820, _tradesWidgetCard.ActualWidth - 32);
     }
 
     private void CollapseTradeDetails(ExecutionRow row)
@@ -1550,6 +2262,11 @@ public partial class MainWindow : Window
 
     private static SolidColorBrush Brush(string color) =>
         new((Color)ColorConverter.ConvertFromString(color));
+
+    private DateTime ToDisplayTime(DateTime utcTime) =>
+        TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.SpecifyKind(utcTime, DateTimeKind.Utc),
+            TimeZoneInfo.FindSystemTimeZoneById(_preferences.TimeZoneId));
 }
 
 internal static class FrameworkElementExtensions

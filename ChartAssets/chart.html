@@ -15,7 +15,7 @@
         #chart { position: relative; }
         #status, #error {
             position: absolute;
-            z-index: 3;
+            z-index: 4;
             top: 10px;
             left: 58px;
             max-width: calc(100% - 76px);
@@ -28,6 +28,7 @@
         }
         #error {
             display: none;
+            z-index: 5;
             top: 50%;
             left: 50%;
             width: max-content;
@@ -38,7 +39,7 @@
         }
         #attribution {
             position: absolute;
-            z-index: 2;
+            z-index: 3;
             bottom: 4px;
             left: 8px;
             padding: 2px 5px;
@@ -47,13 +48,40 @@
             font: 10px "Segoe UI", sans-serif;
         }
         #attribution a { color: #8a8a8a; }
+        #chart-menu {
+            position: absolute;
+            z-index: 6;
+            display: none;
+            min-width: 180px;
+            padding: 5px;
+            border: 1px solid #064d1b;
+            border-radius: 6px;
+            background: #050805;
+            box-shadow: 0 8px 24px #000b;
+            font: 12px "Segoe UI", sans-serif;
+        }
+        #chart-menu button {
+            width: 100%;
+            padding: 8px 10px;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: #00ff41;
+            text-align: left;
+            cursor: pointer;
+        }
+        #chart-menu button:hover { background: #0c2110; }
         [hidden] { display: none !important; }
     </style>
 </head>
 <body>
     <div id="chart">
+        <svg id="execution-overlay" aria-hidden="true"></svg>
         <div id="status">Загружается график…</div>
         <div id="error"></div>
+        <div id="chart-menu" role="menu">
+            <button id="grid-menu-toggle" type="button"></button>
+        </div>
         <div id="attribution">
             <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer">
                 TradingView Lightweight Charts™
@@ -66,18 +94,203 @@
             const container = document.getElementById("chart");
             const status = document.getElementById("status");
             const error = document.getElementById("error");
+            const overlay = document.getElementById("execution-overlay");
+            const chartMenu = document.getElementById("chart-menu");
+            const gridMenuToggle = document.getElementById("grid-menu-toggle");
+            Object.assign(overlay.style, {
+                position: "absolute",
+                inset: "0",
+                width: "100%",
+                height: "100%",
+                overflow: "hidden",
+                pointerEvents: "none",
+                zIndex: "2"
+            });
             let chart;
             let candleSeries;
             let volumeSeries;
             let markers;
             let activeRequest = 0;
             let pendingConfiguration;
+            let activeConfiguration;
+            let activeCandleData = [];
+            let liveSocket;
+            let liveReconnectTimer;
             const candleCache = new Map();
-            const priceLines = [];
+            const svgNamespace = "http://www.w3.org/2000/svg";
             const intervalSeconds = {
                 "1s": 1, "5s": 5, "15s": 15, "30s": 30,
-                "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400
+                "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400
             };
+
+            const timeToX = timestamp => {
+                const interval = intervalSeconds[activeConfiguration.interval];
+                const barTime = Math.floor(timestamp / interval) * interval;
+                let low = 0;
+                let high = activeCandleData.length;
+                while (low < high) {
+                    const middle = (low + high) >>> 1;
+                    if (activeCandleData[middle].time < barTime) {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+
+                if (low < activeCandleData.length &&
+                    activeCandleData[low].time === barTime) {
+                    return chart.timeScale().timeToCoordinate(barTime);
+                }
+
+                const nearby = activeCandleData[low] ??
+                    activeCandleData[activeCandleData.length - 1];
+                return nearby && Math.abs(nearby.time - barTime) <= interval
+                    ? chart.timeScale().timeToCoordinate(nearby.time)
+                    : null;
+            };
+
+            const stopLiveUpdates = () => {
+                if (liveReconnectTimer) {
+                    clearTimeout(liveReconnectTimer);
+                    liveReconnectTimer = null;
+                }
+                const socket = liveSocket;
+                liveSocket = null;
+                if (socket) {
+                    socket.close();
+                }
+            };
+
+            const updateLiveCandle = bar => {
+                if (!activeCandleData.length || !Number.isFinite(bar.time)) {
+                    return;
+                }
+
+                const interval = intervalSeconds[activeConfiguration.interval];
+                const time = Math.floor(bar.time / interval) * interval;
+                const last = activeCandleData[activeCandleData.length - 1];
+                if (time < last.time) {
+                    return;
+                }
+
+                if (time > last.time) {
+                    let previousTime = last.time + interval;
+                    while (previousTime < time &&
+                           activeCandleData.length < 2000) {
+                        const previous = activeCandleData[activeCandleData.length - 1];
+                        const empty = {
+                            time: previousTime,
+                            open: previous.close,
+                            high: previous.close,
+                            low: previous.close,
+                            close: previous.close,
+                            volume: 0
+                        };
+                        activeCandleData.push(empty);
+                        candleSeries.update(empty);
+                        volumeSeries.update({ time: previousTime, value: 0, color: "#00000000" });
+                        previousTime += interval;
+                    }
+                    const next = {
+                        time,
+                        open: bar.open,
+                        high: bar.high,
+                        low: bar.low,
+                        close: bar.close,
+                        volume: bar.volume ?? 0
+                    };
+                    activeCandleData.push(next);
+                    candleSeries.update(next);
+                    volumeSeries.update({
+                        time,
+                        value: next.volume,
+                        color: next.close >= next.open
+                            ? `${activeConfiguration.bullColor}66`
+                            : `${activeConfiguration.bearColor}66`
+                    });
+                } else {
+                    last.high = Math.max(last.high, bar.high);
+                    last.low = Math.min(last.low, bar.low);
+                    last.close = bar.close;
+                    last.volume = bar.addVolume
+                        ? last.volume + (bar.volume ?? 0)
+                        : Math.max(last.volume, bar.volume ?? last.volume);
+                    candleSeries.update(last);
+                    volumeSeries.update({
+                        time,
+                        value: last.volume,
+                        color: last.close >= last.open
+                            ? `${activeConfiguration.bullColor}66`
+                            : `${activeConfiguration.bearColor}66`
+                    });
+                }
+                scheduleExecutionOverlay();
+            };
+
+            const startLiveUpdates = (configuration, request) => {
+                stopLiveUpdates();
+                if (!configuration.isOpen) {
+                    return;
+                }
+
+                const streamName = intervalSeconds[configuration.interval] < 60
+                    ? `${configuration.symbol.toLowerCase()}@aggTrade`
+                    : `${configuration.symbol.toLowerCase()}@kline_${configuration.interval}`;
+                const host = configuration.market === "futures"
+                    ? "wss://fstream.binance.com/ws/"
+                    : "wss://stream.binance.com:9443/ws/";
+                const socket = new WebSocket(`${host}${streamName}`);
+                liveSocket = socket;
+                socket.onopen = () => notify("chart-live:connected");
+                socket.onmessage = event => {
+                    const message = JSON.parse(event.data);
+                    if (intervalSeconds[configuration.interval] < 60) {
+                        const price = Number(message.p);
+                        const time = Math.floor(Number(message.T) / 1000);
+                        const quantity = Number(message.q);
+                        updateLiveCandle({
+                            time,
+                            open: price,
+                            high: price,
+                            low: price,
+                            close: price,
+                            volume: quantity,
+                            addVolume: true
+                        });
+                    } else {
+                        const candle = message.k;
+                        if (!candle) {
+                            return;
+                        }
+                        updateLiveCandle({
+                            time: Number(candle.t) / 1000,
+                            open: Number(candle.o),
+                            high: Number(candle.h),
+                            low: Number(candle.l),
+                            close: Number(candle.c),
+                            volume: Number(candle.v)
+                        });
+                    }
+                };
+                socket.onerror = () => notify("chart-live:error");
+                socket.onclose = () => {
+                    if (liveSocket !== socket) {
+                        return;
+                    }
+                    liveSocket = null;
+                    if (request === activeRequest && configuration.isOpen) {
+                        liveReconnectTimer = setTimeout(
+                            () => startLiveUpdates(configuration, request),
+                            2000);
+                    }
+                };
+            };
+
+            window.chrome?.webview?.addEventListener?.("message", event => {
+                if (event.data === "chart-stop-live") {
+                    stopLiveUpdates();
+                }
+            });
 
             const setStatus = message => {
                 status.textContent = message;
@@ -89,6 +302,112 @@
                 error.style.display = "block";
                 setStatus("");
                 notify(`chart-error:${message}`);
+            };
+
+            const formatTimestamp = (time, timeZone, showSeconds) => {
+                const timestamp = typeof time === "number"
+                    ? time
+                    : Date.UTC(time.year, time.month - 1, time.day) / 1000;
+                return new Intl.DateTimeFormat("ru-RU", {
+                    timeZone,
+                    day: "2-digit",
+                    month: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    ...(showSeconds ? { second: "2-digit" } : {})
+                }).format(new Date(timestamp * 1000)).replace(",", "");
+            };
+
+            const drawExecutionOverlay = () => {
+                if (!chart || !candleSeries || !activeConfiguration) {
+                    return 0;
+                }
+
+                const width = container.clientWidth;
+                const height = container.clientHeight;
+                overlay.setAttribute("viewBox", `0 0 ${width} ${height}`);
+                overlay.replaceChildren();
+                let drawn = 0;
+                const plotWidth = chart.timeScale().width();
+                for (const line of activeConfiguration.priceLines) {
+                    const x = timeToX(line.time);
+                    const y = candleSeries.priceToCoordinate(line.price);
+                    if (x === null || y === null || x < 0 || x > plotWidth) {
+                        continue;
+                    }
+                    const element = document.createElementNS(svgNamespace, "line");
+                    element.setAttribute("x1", String(x));
+                    element.setAttribute("x2", String(plotWidth));
+                    element.setAttribute("y1", String(y));
+                    element.setAttribute("y2", String(y));
+                    element.setAttribute("stroke", line.kind === "entry"
+                        ? activeConfiguration.bullColor
+                        : activeConfiguration.bearColor);
+                    element.setAttribute("stroke-width", "1");
+                    element.setAttribute("stroke-dasharray", "4 4");
+                    element.setAttribute("opacity", "0.9");
+                    overlay.appendChild(element);
+                }
+                for (const execution of activeConfiguration.executions) {
+                    const x = timeToX(execution.time);
+                    const y = candleSeries.priceToCoordinate(execution.price);
+                    if (x === null || y === null || x < 0 || x > width || y < 0 || y > height) {
+                        continue;
+                    }
+
+                    const isMain = execution.isMainEntry || execution.isMainExit;
+                    const size = isMain ? 8 : 5.5;
+                    const color = execution.side === "BUY"
+                        ? activeConfiguration.bullColor
+                        : activeConfiguration.bearColor;
+                    const group = document.createElementNS(svgNamespace, "g");
+                    group.setAttribute("transform", `translate(${x} ${y})`);
+                    const mark = document.createElementNS(svgNamespace, "path");
+                    const direction = execution.side === "BUY" ? 1 : -1;
+                    mark.setAttribute("d", `M 0 0 L ${-size} ${direction * size} L ${size} ${direction * size} Z`);
+                    mark.setAttribute("fill", color);
+                    mark.setAttribute("stroke", color);
+                    mark.setAttribute("stroke-width", isMain ? "1.5" : "1");
+                    mark.setAttribute("stroke-linecap", "square");
+                    mark.setAttribute("stroke-linejoin", "miter");
+                    group.appendChild(mark);
+                    overlay.appendChild(group);
+                    drawn++;
+                }
+
+                const summary = activeConfiguration.positionSummary;
+                if (summary.percent !== null && summary.percent !== undefined) {
+                    const entryY = candleSeries.priceToCoordinate(summary.averageEntryPrice);
+                    const exitY = candleSeries.priceToCoordinate(summary.averageExitPrice);
+                    if (entryY !== null && exitY !== null) {
+                        const label = document.createElementNS(svgNamespace, "text");
+                        label.setAttribute("x", String(Math.max(8, width - 78)));
+                        label.setAttribute("y", String(Math.max(14, (entryY + exitY) / 2)));
+                        label.setAttribute("text-anchor", "end");
+                        label.setAttribute("font-family", "Segoe UI, sans-serif");
+                        label.setAttribute("font-size", "13");
+                        label.setAttribute("font-weight", "700");
+                        label.setAttribute("fill", summary.pnl >= 0
+                            ? activeConfiguration.bullColor
+                            : activeConfiguration.bearColor);
+                        const percent = `${summary.percent >= 0 ? "+" : ""}${summary.percent.toFixed(2)}%`;
+                        const pnl = `${summary.pnl >= 0 ? "+" : ""}${summary.pnl.toFixed(4)} ${summary.quoteAsset}`;
+                        label.textContent = `${percent} · ${pnl}`;
+                        overlay.appendChild(label);
+                    }
+                }
+                return drawn;
+            };
+
+            let overlayFrame = 0;
+            const scheduleExecutionOverlay = () => {
+                if (overlayFrame !== 0) {
+                    return;
+                }
+                overlayFrame = requestAnimationFrame(() => {
+                    overlayFrame = 0;
+                    drawExecutionOverlay();
+                });
             };
 
             const initializeChart = () => {
@@ -104,9 +423,24 @@
                         horzLines: { color: "#064d1b" }
                     },
                     rightPriceScale: { borderColor: "#18351f" },
-                    timeScale: { borderColor: "#18351f", timeVisible: true, secondsVisible: true },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-                    localization: { locale: "ru-RU" }
+                    localization: {
+                        locale: "ru-RU",
+                        timeFormatter: time => formatTimestamp(
+                            time,
+                            activeConfiguration?.timeZone ?? "UTC",
+                            intervalSeconds[activeConfiguration?.interval] < 60)
+                    },
+                    timeScale: {
+                        borderColor: "#18351f",
+                        timeVisible: true,
+                        secondsVisible: true,
+                        tickMarkFormatter: (time, tickMarkType, locale) =>
+                            formatTimestamp(
+                                time,
+                                activeConfiguration?.timeZone ?? "UTC",
+                                intervalSeconds[activeConfiguration?.interval] < 60)
+                    }
                 });
                 candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
                     upColor: "#00ff41",
@@ -126,6 +460,31 @@
                     scaleMargins: { top: 0.82, bottom: 0 }
                 });
                 markers = LightweightCharts.createSeriesMarkers(candleSeries, []);
+                chart.timeScale().subscribeVisibleLogicalRangeChange(scheduleExecutionOverlay);
+                const resizeObserver = new ResizeObserver(scheduleExecutionOverlay);
+                resizeObserver.observe(container);
+                container.addEventListener("wheel", scheduleExecutionOverlay, { passive: true });
+                container.addEventListener("pointermove", scheduleExecutionOverlay, { passive: true });
+                container.addEventListener("pointerup", scheduleExecutionOverlay, { passive: true });
+                container.addEventListener("contextmenu", event => {
+                    event.preventDefault();
+                    const rect = container.getBoundingClientRect();
+                    chartMenu.style.display = "block";
+                    chartMenu.style.left = `${Math.min(event.clientX - rect.left, rect.width - chartMenu.offsetWidth - 8)}px`;
+                    chartMenu.style.top = `${Math.min(event.clientY - rect.top, rect.height - chartMenu.offsetHeight - 8)}px`;
+                    gridMenuToggle.textContent = activeConfiguration?.showGrid === false
+                        ? "Показать сетку"
+                        : "Отключить сетку";
+                });
+                document.addEventListener("pointerdown", event => {
+                    if (!chartMenu.contains(event.target)) {
+                        chartMenu.style.display = "none";
+                    }
+                });
+                gridMenuToggle.addEventListener("click", () => {
+                    chartMenu.style.display = "none";
+                    notify("toggle-grid");
+                });
                 notify("chart-ready");
                 if (pendingConfiguration) {
                     void render(pendingConfiguration);
@@ -134,17 +493,20 @@
 
             const getBars = async configuration => {
                 const seconds = intervalSeconds[configuration.interval];
-                const cacheBucket = Math.floor(configuration.selectedTime / (seconds * 500));
-                const key = `${configuration.market}:${configuration.symbol}:${configuration.interval}:${cacheBucket}`;
+                const focusTime = configuration.isOpen
+                    ? Date.now() / 1000
+                    : configuration.selectedTime;
+                const cacheBucket = Math.floor(focusTime / (seconds * 500));
+                const key = `${configuration.market}:${configuration.symbol}:${configuration.interval}:${configuration.isOpen}:${cacheBucket}`;
                 const cached = candleCache.get(key);
                 if (cached && Date.now() - cached.loadedAt < 15_000) {
                     return cached.bars;
                 }
 
-                const center = configuration.selectedTime * 1000;
-                const halfRange = seconds < 60
-                    ? Math.max(30_000, seconds * 60_000)
-                    : seconds * 500_000;
+                const center = (configuration.isOpen
+                    ? Date.now()
+                    : configuration.selectedTime * 1000);
+                const halfRange = seconds * 500_000;
                 const startTime = Math.max(0, Math.floor(center - halfRange));
                 const endTime = Math.min(Date.now(), Math.ceil(center + halfRange));
                 let url;
@@ -170,34 +532,86 @@
                         volume: Number(row[5])
                     }));
                 } else {
-                    bars = await getTradeBars(configuration, endTime, seconds);
+                    bars = await getTradeBars(configuration, startTime, endTime);
                 }
                 if (!bars.length) {
                     throw new Error("Binance не вернула свечи для этого тикера и периода.");
+                }
+                if (seconds < 60) {
+                    bars = fillTradeBarGaps(bars, seconds);
                 }
                 candleCache.set(key, { bars, loadedAt: Date.now() });
                 return bars;
             };
 
-            const getTradeBars = async (configuration, endTime, seconds) => {
+            const fillTradeBarGaps = (bars, seconds) => {
+                if (bars.length < 2) {
+                    return bars;
+                }
+                const result = [];
+                for (let index = 0; index < bars.length; index++) {
+                    const bar = bars[index];
+                    result.push(bar);
+                    const next = bars[index + 1];
+                    if (!next) {
+                        break;
+                    }
+                    for (let time = bar.time + seconds;
+                         time < next.time && result.length < 2000;
+                         time += seconds) {
+                        result.push({
+                            time,
+                            open: bar.close,
+                            high: bar.close,
+                            low: bar.close,
+                            close: bar.close,
+                            volume: 0
+                        });
+                    }
+                    if (result.length >= 2000) {
+                        result.push(...bars.slice(index + 1));
+                        break;
+                    }
+                }
+                return result;
+            };
+
+            const getTradeBars = async (configuration, startTime, endTime) => {
                 const base = configuration.market === "futures"
                     ? "https://fapi.binance.com/fapi/v1/aggTrades"
                     : "https://api.binance.com/api/v3/aggTrades";
-                const selectedTime = configuration.selectedTime * 1000;
                 const symbol = encodeURIComponent(configuration.symbol);
                 const requestEnd = Math.min(endTime, Date.now());
-                const [beforeResponse, afterResponse] = await Promise.all([
-                    fetch(`${base}?symbol=${symbol}&endTime=${selectedTime}&limit=1000`),
-                    fetch(`${base}?symbol=${symbol}&startTime=${selectedTime + 1}` +
-                        `&endTime=${requestEnd}&limit=1000`)
-                ]);
-                if (!beforeResponse.ok || !afterResponse.ok) {
-                    const failedResponse = !beforeResponse.ok ? beforeResponse : afterResponse;
-                    throw new Error(`Binance вернула HTTP ${failedResponse.status} для сделок`);
-                }
+                const fetchRange = async (rangeStart, rangeEnd) => {
+                    const trades = [];
+                    let cursor = rangeStart;
+                    let pages = 0;
+                    while (cursor <= rangeEnd && pages < 8) {
+                        const response = await fetch(
+                            `${base}?symbol=${symbol}&startTime=${cursor}` +
+                            `&endTime=${rangeEnd}&limit=1000`);
+                        if (!response.ok) {
+                            throw new Error(`Binance вернула HTTP ${response.status} для сделок`);
+                        }
+                        const page = await response.json();
+                        if (!page.length) {
+                            break;
+                        }
+                        trades.push(...page);
+                        pages++;
+                        if (page.length < 1000) {
+                            break;
+                        }
+                        cursor = Number(page[page.length - 1].T) + 1;
+                    }
+                    return trades;
+                };
+                const pivot = Math.max(
+                    startTime,
+                    Math.min(requestEnd, configuration.selectedTime * 1000));
                 const [beforeTrades, afterTrades] = await Promise.all([
-                    beforeResponse.json(),
-                    afterResponse.json()
+                    fetchRange(startTime, pivot),
+                    fetchRange(pivot, requestEnd)
                 ]);
                 const trades = [...new Map(
                     [...beforeTrades, ...afterTrades].map(trade => [trade.a, trade])).values()];
@@ -229,6 +643,7 @@
             const render = async configuration => {
                 pendingConfiguration = configuration;
                 const request = ++activeRequest;
+                stopLiveUpdates();
                 error.style.display = "none";
                 setStatus(`Загружаю ${configuration.symbol} · ${configuration.interval}…`);
                 try {
@@ -244,6 +659,12 @@
                         borderDownColor: configuration.bearColor,
                         wickDownColor: configuration.bearColor
                     });
+                    chart.applyOptions({
+                        grid: {
+                            vertLines: { color: configuration.showGrid ? configuration.gridColor : "transparent" },
+                            horzLines: { color: configuration.showGrid ? configuration.gridColor : "transparent" }
+                        }
+                    });
                     const candleData = bars.map(({ volume, ...bar }) => bar);
                     const lowestPrice = Math.min(...bars.map(bar => bar.low));
                     const pricePrecision = Math.min(
@@ -256,6 +677,8 @@
                             minMove: 10 ** -pricePrecision
                         }
                     });
+                    activeConfiguration = configuration;
+                    activeCandleData = candleData;
                     candleSeries.setData(candleData);
                     volumeSeries.setData(bars.map(bar => ({
                         time: bar.time,
@@ -265,70 +688,48 @@
                             : `${configuration.bearColor}66`
                     })));
 
+                    markers.setMarkers([]);
+
                     const interval = intervalSeconds[configuration.interval];
-                    const findNearestBarTime = time => {
+                    const focusStart = configuration.executions.reduce(
+                        (start, item) => Math.min(start, item.time),
+                        configuration.focusStartTime ?? configuration.selectedTime);
+                    const focusEnd = configuration.executions.reduce(
+                        (end, item) => Math.max(end, item.time),
+                        configuration.focusEndTime ?? configuration.selectedTime);
+                    const logicalIndexForTime = time => {
+                        const barTime = Math.floor(time / interval) * interval;
                         let low = 0;
                         let high = candleData.length;
                         while (low < high) {
                             const middle = (low + high) >>> 1;
-                            if (candleData[middle].time < time) {
+                            if (candleData[middle].time < barTime) {
                                 low = middle + 1;
                             } else {
                                 high = middle;
                             }
                         }
-                        const after = candleData[Math.min(low, candleData.length - 1)];
-                        const before = candleData[Math.max(0, low - 1)];
-                        const nearest = Math.abs(after.time - time) < Math.abs(before.time - time)
-                            ? after.time
-                            : before.time;
-                        return Math.abs(nearest - time) <= interval ? nearest : null;
+                        if (low >= candleData.length) {
+                            return candleData.length - 1;
+                        }
+                        if (low === 0 ||
+                            candleData[low].time === barTime ||
+                            barTime - candleData[low - 1].time >
+                                candleData[low].time - barTime) {
+                            return low;
+                        }
+                        return low - 1;
                     };
-                    const executionMarkers = configuration.executions
-                        .map(item => {
-                            const time = findNearestBarTime(
-                                Math.floor(item.time / interval) * interval);
-                            if (time === null) {
-                                return null;
-                            }
-                            const isBuy = item.side === "BUY";
-                            return {
-                                time,
-                                position: isBuy ? "belowBar" : "aboveBar",
-                                color: isBuy ? configuration.bullColor : "#ff3158",
-                                shape: isBuy ? "arrowUp" : "arrowDown",
-                                text: ""
-                            };
-                        })
-                        .filter(Boolean)
-                        .sort((first, second) => first.time - second.time);
-                    markers.setMarkers(executionMarkers);
-
-                    for (const line of priceLines) {
-                        candleSeries.removePriceLine(line);
-                    }
-                    priceLines.length = 0;
-                    for (const line of configuration.priceLines) {
-                        priceLines.push(candleSeries.createPriceLine({
-                            price: line.price,
-                            color: line.kind === "entry" ? configuration.bullColor : "#ff3158",
-                            lineWidth: 1,
-                            lineStyle: LightweightCharts.LineStyle.Dashed,
-                            axisLabelVisible: true,
-                            title: line.kind === "entry" ? "Вход" : "Выход"
-                        }));
-                    }
-
-                    const selectedTime = configuration.selectedTime;
-                    const firstTime = candleData[0].time;
-                    const lastTime = candleData[candleData.length - 1].time;
-                    const focusTime = Math.min(lastTime, Math.max(firstTime, selectedTime));
-                    const from = Math.max(firstTime, focusTime - interval * 80);
-                    const to = Math.min(lastTime, focusTime + interval * 80);
-                    chart.timeScale().setVisibleRange({ from, to: Math.max(from + interval, to) });
+                    const firstFocusIndex = logicalIndexForTime(focusStart);
+                    const lastFocusIndex = logicalIndexForTime(focusEnd);
+                    chart.timeScale().setVisibleLogicalRange({
+                        from: Math.max(0, firstFocusIndex - 80),
+                        to: lastFocusIndex + 80
+                    });
+                    const marked = drawExecutionOverlay();
                     setStatus("");
-                    const marked = executionMarkers.length;
                     notify(`chart-loaded:${configuration.symbol}:${marked}:${bars.length}`);
+                    startLiveUpdates(configuration, request);
                 } catch (exception) {
                     if (request === activeRequest) {
                         showError(`Не удалось загрузить график: ${exception.message}`);

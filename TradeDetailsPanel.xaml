@@ -22,15 +22,11 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
-            <DockPanel Grid.ColumnSpan="3" Margin="2,0,2,10">
-                <StackPanel>
-                    <TextBlock x:Name="TradeTitle" FontSize="17" FontWeight="SemiBold"/>
-                    <TextBlock x:Name="TradeSummary" Foreground="{DynamicResource MutedBrush}"
-                               Margin="0,3,0,0"/>
-                </StackPanel>
-                <Button Content="Свернуть карточку" DockPanel.Dock="Right"
-                        VerticalAlignment="Center" Click="CollapseClick"/>
-            </DockPanel>
+            <StackPanel Grid.ColumnSpan="3" Margin="2,0,2,10">
+                <TextBlock x:Name="TradeTitle" FontSize="17" FontWeight="SemiBold"/>
+                <TextBlock x:Name="TradeSummary" Foreground="{DynamicResource MutedBrush}"
+                           Margin="0,3,0,0"/>
+            </StackPanel>
 
             <Grid Grid.Row="1" Grid.Column="0">
                 <Grid.RowDefinitions>
@@ -56,6 +52,7 @@
                         <ComboBoxItem Content="15 мин" Tag="15m"/>
                         <ComboBoxItem Content="1 час" Tag="1h"/>
                         <ComboBoxItem Content="4 часа" Tag="4h"/>
+                        <ComboBoxItem Content="1 день" Tag="1d"/>
                     </ComboBox>
                 </DockPanel>
                 <Border Grid.Row="1" Background="#000000"
@@ -64,7 +61,7 @@
                     <wv2:WebView2 x:Name="ChartWebView" DefaultBackgroundColor="#000000"/>
                 </Border>
                 <TextBlock x:Name="ChartStatus" Grid.Row="2" Margin="2,7,2,0"
-                           Text="Виджет TradingView загружается через интернет."
+                           Text="Загружается график и исполнения выбранной позиции."
                            Foreground="{DynamicResource MutedBrush}" FontSize="10"
                            TextTrimming="CharacterEllipsis"/>
             </Grid>
@@ -105,26 +102,22 @@
                              TextChanged="JournalTextChanged"/>
                 </DockPanel>
                 <DockPanel Grid.Row="6" Margin="0,0,0,6">
-                    <TextBlock Text="Скриншот сделки" FontSize="11"
+                    <TextBlock Text="Изображения сделки" FontSize="11"
                                Foreground="{DynamicResource MutedBrush}"
                                VerticalAlignment="Center"/>
                     <Button DockPanel.Dock="Right" Content="Добавить PNG/JPG"
                             Padding="8,4" Click="AddScreenshotClick"/>
                 </DockPanel>
-                <Border x:Name="ScreenshotBorder" Grid.Row="7" Height="82"
+                <Border x:Name="ScreenshotBorder" Grid.Row="7" Height="100"
                         Background="#020502" BorderBrush="{DynamicResource BorderBrush}"
                         BorderThickness="1" CornerRadius="5" ClipToBounds="True">
-                    <Grid>
-                        <Image x:Name="ScreenshotImage" Stretch="Uniform"/>
-                        <TextBlock x:Name="ScreenshotEmptyText"
-                                   Text="Изображение хранится локально на этом ПК"
-                                   Foreground="{DynamicResource MutedBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   TextAlignment="Center" TextWrapping="Wrap"/>
-                    </Grid>
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <WrapPanel x:Name="ScreenshotGallery" VerticalAlignment="Center"/>
+                    </ScrollViewer>
                 </Border>
                 <DockPanel Grid.Row="8" Margin="0,9,0,5">
-                    <TextBlock Text="ИСПОЛНЕНИЯ ПО ЭТОМУ ТИКЕРУ"
+                    <TextBlock Text="ИСПОЛНЕНИЯ ПО ЭТОЙ ПОЗИЦИИ"
                                FontSize="10" FontWeight="Bold"
                                Foreground="{DynamicResource MutedBrush}"/>
                     <TextBlock x:Name="SaveStatus" DockPanel.Dock="Right"
@@ -141,6 +134,33 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="Сторона" Binding="{Binding SideLabel}" Width="75"/>
                         <DataGridTextColumn Header="Время" Binding="{Binding ExecutedAtLocal, StringFormat=HH:mm:ss}" Width="75"/>
+                        <DataGridTemplateColumn Header="Тип ордера" Width="115">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate>
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Ellipse Width="7" Height="7" Margin="2,0,5,0">
+                                            <Ellipse.Style>
+                                                <Style TargetType="Ellipse">
+                                                    <Setter Property="Fill" Value="#707070"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding Execution.OrderType}" Value="MARKET">
+                                                            <Setter Property="Fill" Value="#FF8A00"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Execution.OrderType}" Value="LIMIT">
+                                                            <Setter Property="Fill" Value="#4285FF"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding Execution.OrderType}" Value="LIMIT_MAKER">
+                                                            <Setter Property="Fill" Value="#4285FF"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Ellipse.Style>
+                                        </Ellipse>
+                                        <TextBlock Text="{Binding Execution.OrderTypeDisplay}"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
                         <DataGridTextColumn Header="Объём" Binding="{Binding Quantity, StringFormat={}{0:0.####}}" Width="85"/>
                         <DataGridTextColumn Header="Цена" Binding="{Binding Price, StringFormat={}{0:0.####}}" Width="100"/>
                         <DataGridTextColumn Header="P&amp;L" Binding="{Binding PnlDisplay}" Width="100"/>

@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DnevnikSdelok"
-        Title="DnevnikSdelok — Мои сделки"
+        Title="DnevnikSdelok"
         Height="920" Width="1500" MinHeight="680" MinWidth="980"
         WindowStartupLocation="CenterScreen" WindowState="Maximized"
         ResizeMode="CanResize"
@@ -15,46 +15,42 @@
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Window.Resources>
-    <Grid Margin="18,12,18,12">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
-        <Border x:Name="HeaderBand" Grid.Row="0" Margin="0,0,0,12"
-                Background="#030A04" BorderBrush="{DynamicResource BorderBrush}"
-                BorderThickness="1" CornerRadius="8" Padding="16,10">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel>
-                    <TextBlock Text="DnevnikSdelok" FontSize="23" FontWeight="SemiBold"/>
-                    <TextBlock Text="Мои сделки · Binance через Vataga"
-                               Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0"/>
-                </StackPanel>
+    <TabControl x:Name="MainTabs" Background="#000000" Foreground="#00FF41">
+        <TabItem Header="Мои сделки">
+            <Grid x:Name="TradesPage" Margin="14"/>
+        </TabItem>
+        <TabItem Header="Заметки">
+            <Grid Margin="14">
+                <DataGrid x:Name="NotesGrid" AutoGenerateColumns="False"
+                          IsReadOnly="True" CanUserAddRows="False"
+                          SelectionUnit="FullRow" SelectionMode="Single"
+                          MouseDoubleClick="NotesGridMouseDoubleClick">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Дата и время" Binding="{Binding EntryDisplay}" Width="210"/>
+                        <DataGridTextColumn Header="Тикер" Binding="{Binding Symbol}" Width="130"/>
+                        <DataGridTextColumn Header="Категория" Binding="{Binding Category}" Width="140"/>
+                        <DataGridTextColumn Header="Причина входа" Binding="{Binding EntryReason}" Width="220"/>
+                        <DataGridTextColumn Header="Заметка" Binding="{Binding JournalDescription}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
             </Grid>
-        </Border>
-        <ScrollViewer x:Name="DashboardScrollViewer" Grid.Row="1" Background="#000000"
-                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-            <WrapPanel x:Name="DashboardWidgets" AllowDrop="True"
-                       Drop="DashboardDrop" DragOver="DashboardDragOver"/>
-        </ScrollViewer>
-        <Grid Grid.Row="2" Margin="2,10,2,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <TextBlock x:Name="StatusText" Text="Данные хранятся локально на этом компьютере."
-                       Foreground="{DynamicResource MutedBrush}" FontSize="11"
-                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-            <Button x:Name="RemoveConnectionButton" Grid.Column="1" Content="Удалить выбранное подключение"
-                    Padding="10,5" FontSize="11" Margin="0,0,8,0" Visibility="Collapsed"
-                    Click="RemoveConnectionClick"/>
-            <Button Content="⚙  Настройки" Grid.Column="2" Padding="10,5"
-                    FontSize="11" Click="SettingsClick"/>
-        </Grid>
-    </Grid>
+        </TabItem>
+        <TabItem Header="Сводка">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <ScrollViewer x:Name="DashboardScrollViewer" Grid.Row="0" Background="#000000"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <WrapPanel x:Name="DashboardWidgets" AllowDrop="True"
+                               Drop="DashboardDrop" DragOver="DashboardDragOver"/>
+                </ScrollViewer>
+                <TextBlock x:Name="StatusText" Grid.Row="1" Margin="4,8"
+                           Text="Данные хранятся локально на этом компьютере."
+                           Foreground="{DynamicResource MutedBrush}" FontSize="11"
+                           TextTrimming="CharacterEllipsis"/>
+            </Grid>
+        </TabItem>
+    </TabControl>
 </Window>
