@@ -6,41 +6,51 @@
         MinWidth="460" MinHeight="540"
         WindowStartupLocation="CenterOwner"
         ResizeMode="CanResize"
-        Background="#111820"
-        Foreground="#E8EDF2">
+        Background="#000000"
+        Foreground="#00FF41">
     <Window.Resources>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#0B1118"/>
-            <Setter Property="Foreground" Value="#F0F4F7"/>
-            <Setter Property="BorderBrush" Value="#2C3743"/>
-            <Setter Property="Padding" Value="12,10"/>
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="CaretBrush" Value="#F0F4F7"/>
-            <Setter Property="Margin" Value="0,6,0,14"/>
-        </Style>
-        <Style TargetType="PasswordBox">
-            <Setter Property="Background" Value="#0B1118"/>
-            <Setter Property="Foreground" Value="#F0F4F7"/>
-            <Setter Property="BorderBrush" Value="#2C3743"/>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkControls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
             <Setter Property="Padding" Value="12,10"/>
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Margin" Value="0,6,0,14"/>
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#0B1118"/>
-            <Setter Property="Foreground" Value="#F0F4F7"/>
-            <Setter Property="BorderBrush" Value="#2C3743"/>
+            </Style>
+            <Style TargetType="PasswordBox">
+                <Setter Property="Background" Value="{DynamicResource ControlBrush}"/>
+                <Setter Property="Foreground" Value="{DynamicResource ForegroundBrush}"/>
+                <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+                <Setter Property="CaretBrush" Value="{DynamicResource ForegroundBrush}"/>
+            <Setter Property="Padding" Value="12,10"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Margin" Value="0,6,0,14"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="PasswordBox">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="5">
+                                <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                            </Border>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+            <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="Margin" Value="0,6,0,14"/>
-        </Style>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#72D6A0"/>
+            </Style>
+            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="Foreground" Value="#101812"/>
-            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}"/>
             <Setter Property="Padding" Value="16,11"/>
             <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-        </Style>
+            </Style>
+        </ResourceDictionary>
     </Window.Resources>
     <Grid Margin="28">
         <Grid.RowDefinitions>
@@ -82,7 +92,8 @@
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <Button Content="Отмена" Grid.Column="1" Margin="0,0,10,0"
-                    Background="#26323D" Foreground="#DDE5EB" Click="CancelClick"/>
+                    Background="{DynamicResource ControlBrush}"
+                    Foreground="{DynamicResource ForegroundBrush}" Click="CancelClick"/>
             <Button x:Name="ConnectButton" Content="Проверить и сохранить"
                     Grid.Column="2" IsEnabled="False" Click="ConnectClick"/>
         </Grid>

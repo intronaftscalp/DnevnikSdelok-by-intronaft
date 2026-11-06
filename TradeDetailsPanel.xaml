@@ -1,0 +1,152 @@
+<UserControl x:Class="DnevnikSdelok.TradeDetailsPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+             HorizontalAlignment="Stretch" MinHeight="600" MinWidth="760" Height="650">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkControls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+    <Border Background="#000000" BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1" CornerRadius="8" Padding="12">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2.05*" MinWidth="500"/>
+                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="1*" MinWidth="280"/>
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
+            <DockPanel Grid.ColumnSpan="3" Margin="2,0,2,10">
+                <StackPanel>
+                    <TextBlock x:Name="TradeTitle" FontSize="17" FontWeight="SemiBold"/>
+                    <TextBlock x:Name="TradeSummary" Foreground="{DynamicResource MutedBrush}"
+                               Margin="0,3,0,0"/>
+                </StackPanel>
+                <Button Content="Свернуть карточку" DockPanel.Dock="Right"
+                        VerticalAlignment="Center" Click="CollapseClick"/>
+            </DockPanel>
+
+            <Grid Grid.Row="1" Grid.Column="0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <DockPanel Margin="0,0,0,7">
+                    <TextBlock Text="График сделки" FontWeight="SemiBold"
+                               VerticalAlignment="Center"/>
+                    <Button DockPanel.Dock="Right" Content="Снимок PNG"
+                            Padding="8,4" Margin="6,0,0,0"
+                            Click="SaveChartScreenshotClick"/>
+                    <ComboBox x:Name="IntervalSelector" DockPanel.Dock="Right"
+                              Width="105" Height="32" SelectedIndex="5"
+                              SelectionChanged="IntervalSelectionChanged">
+                        <ComboBoxItem Content="1 сек" Tag="1s"/>
+                        <ComboBoxItem Content="5 сек" Tag="5s"/>
+                        <ComboBoxItem Content="15 сек" Tag="15s"/>
+                        <ComboBoxItem Content="30 сек" Tag="30s"/>
+                        <ComboBoxItem Content="1 мин" Tag="1m"/>
+                        <ComboBoxItem Content="5 мин" Tag="5m"/>
+                        <ComboBoxItem Content="15 мин" Tag="15m"/>
+                        <ComboBoxItem Content="1 час" Tag="1h"/>
+                        <ComboBoxItem Content="4 часа" Tag="4h"/>
+                    </ComboBox>
+                </DockPanel>
+                <Border Grid.Row="1" Background="#000000"
+                        BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="6" ClipToBounds="True">
+                    <wv2:WebView2 x:Name="ChartWebView" DefaultBackgroundColor="#000000"/>
+                </Border>
+                <TextBlock x:Name="ChartStatus" Grid.Row="2" Margin="2,7,2,0"
+                           Text="Виджет TradingView загружается через интернет."
+                           Foreground="{DynamicResource MutedBrush}" FontSize="10"
+                           TextTrimming="CharacterEllipsis"/>
+            </Grid>
+            <GridSplitter Grid.Row="1" Grid.Column="1" Width="6" HorizontalAlignment="Center"
+                          VerticalAlignment="Stretch" ResizeDirection="Columns"
+                          Background="{DynamicResource BorderBrush}"/>
+
+            <Grid Grid.Row="1" Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="1.2*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="1*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+                <TextBlock Text="ЗАМЕТКИ К СДЕЛКЕ" FontSize="11" FontWeight="Bold"
+                           Foreground="{DynamicResource MutedBrush}" Margin="2,0,0,7"/>
+                <TextBox x:Name="DescriptionBox" Grid.Row="1" AcceptsReturn="True"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                         ToolTip="Описание сделки" TextChanged="JournalTextChanged"/>
+                <TextBlock Grid.Row="2" Text="Вывод" FontSize="11"
+                           Foreground="{DynamicResource MutedBrush}" Margin="2,7,0,5"/>
+                <TextBox x:Name="ConclusionBox" Grid.Row="3" AcceptsReturn="True"
+                         TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                         ToolTip="Вывод по сделке" TextChanged="JournalTextChanged"/>
+                <TextBlock Grid.Row="4" Text="Ссылка на видео" FontSize="11"
+                           Foreground="{DynamicResource MutedBrush}" Margin="2,7,0,5"/>
+                <DockPanel Grid.Row="5" Margin="0,0,0,7">
+                    <Button DockPanel.Dock="Right" Content="Открыть" Padding="8,4"
+                            Margin="6,0,0,0" Click="OpenVideoClick"/>
+                    <TextBox x:Name="VideoUrlBox" Height="32" VerticalContentAlignment="Center"
+                             ToolTip="Ссылка YouTube, Vimeo или другая https-ссылка"
+                             TextChanged="JournalTextChanged"/>
+                </DockPanel>
+                <DockPanel Grid.Row="6" Margin="0,0,0,6">
+                    <TextBlock Text="Скриншот сделки" FontSize="11"
+                               Foreground="{DynamicResource MutedBrush}"
+                               VerticalAlignment="Center"/>
+                    <Button DockPanel.Dock="Right" Content="Добавить PNG/JPG"
+                            Padding="8,4" Click="AddScreenshotClick"/>
+                </DockPanel>
+                <Border x:Name="ScreenshotBorder" Grid.Row="7" Height="82"
+                        Background="#020502" BorderBrush="{DynamicResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="5" ClipToBounds="True">
+                    <Grid>
+                        <Image x:Name="ScreenshotImage" Stretch="Uniform"/>
+                        <TextBlock x:Name="ScreenshotEmptyText"
+                                   Text="Изображение хранится локально на этом ПК"
+                                   Foreground="{DynamicResource MutedBrush}"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   TextAlignment="Center" TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+                <DockPanel Grid.Row="8" Margin="0,9,0,5">
+                    <TextBlock Text="ИСПОЛНЕНИЯ ПО ЭТОМУ ТИКЕРУ"
+                               FontSize="10" FontWeight="Bold"
+                               Foreground="{DynamicResource MutedBrush}"/>
+                    <TextBlock x:Name="SaveStatus" DockPanel.Dock="Right"
+                               Foreground="{DynamicResource MutedBrush}" FontSize="10"/>
+                </DockPanel>
+                <DataGrid x:Name="ExecutionsGrid" Grid.Row="9" MaxHeight="115"
+                          AutoGenerateColumns="False" HeadersVisibility="Column"
+                          IsReadOnly="True" CanUserResizeRows="False"
+                          CanUserReorderColumns="False" CanUserSortColumns="False"
+                          RowHeight="25" ColumnHeaderHeight="26" FontSize="10"
+                          Background="#030A04" BorderThickness="0"
+                          HorizontalScrollBarVisibility="Auto"
+                          VerticalScrollBarVisibility="Auto">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Сторона" Binding="{Binding SideLabel}" Width="75"/>
+                        <DataGridTextColumn Header="Время" Binding="{Binding ExecutedAtLocal, StringFormat=HH:mm:ss}" Width="75"/>
+                        <DataGridTextColumn Header="Объём" Binding="{Binding Quantity, StringFormat={}{0:0.####}}" Width="85"/>
+                        <DataGridTextColumn Header="Цена" Binding="{Binding Price, StringFormat={}{0:0.####}}" Width="100"/>
+                        <DataGridTextColumn Header="P&amp;L" Binding="{Binding PnlDisplay}" Width="100"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Grid>
+    </Border>
+</UserControl>

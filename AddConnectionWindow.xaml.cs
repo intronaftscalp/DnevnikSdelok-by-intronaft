@@ -19,6 +19,19 @@ public partial class AddConnectionWindow : Window
         _database = database;
     }
 
+    public void ApplyTheme(DashboardPreferences preferences)
+    {
+        Background = Brush(preferences.WindowBackground);
+        Foreground = Brush(preferences.Foreground);
+        Resources["PanelBrush"] = Brush(preferences.WindowBackground);
+        Resources["BorderBrush"] = Brush(preferences.ChartGridColor);
+        Resources["MutedBrush"] = Brush(preferences.MutedForeground);
+        Resources["AccentBrush"] = Brush(preferences.AccentColor);
+        Resources["ForegroundBrush"] = Brush(preferences.Foreground);
+        Resources["ControlBrush"] = Brush(Blend(preferences.WindowBackground, preferences.AccentColor, 0.035));
+        Resources["ControlHoverBrush"] = Brush(Blend(preferences.WindowBackground, preferences.AccentColor, 0.08));
+    }
+
     private void InputChanged(object sender, RoutedEventArgs e)
     {
         ConnectButton.IsEnabled =
@@ -46,9 +59,11 @@ public partial class AddConnectionWindow : Window
 
         try
         {
+            decimal currentBalance;
             using (var client = new BinanceApiClient(apiKey, apiSecret, market))
             {
                 await client.TestConnectionAsync(CancellationToken.None);
+                currentBalance = await client.GetCurrentBalanceAsync(CancellationToken.None);
             }
 
             _database.AddConnection(new ApiConnection
@@ -56,7 +71,8 @@ public partial class AddConnectionWindow : Window
                 Name = accountName,
                 Market = market,
                 ProtectedApiKey = WindowsSecretProtection.Protect(apiKey),
-                ProtectedApiSecret = WindowsSecretProtection.Protect(apiSecret)
+                ProtectedApiSecret = WindowsSecretProtection.Protect(apiSecret),
+                CurrentBalance = currentBalance
             });
             ApiKeyBox.Clear();
             ApiSecretBox.Clear();
@@ -73,4 +89,16 @@ public partial class AddConnectionWindow : Window
     }
 
     private void CancelClick(object sender, RoutedEventArgs e) => Close();
+
+    private static string Blend(string first, string second, double amount)
+    {
+        var a = (Color)ColorConverter.ConvertFromString(first);
+        var b = (Color)ColorConverter.ConvertFromString(second);
+        return $"#{(byte)(a.R * (1 - amount) + b.R * amount):X2}" +
+               $"{(byte)(a.G * (1 - amount) + b.G * amount):X2}" +
+               $"{(byte)(a.B * (1 - amount) + b.B * amount):X2}";
+    }
+
+    private static SolidColorBrush Brush(string color) =>
+        new((Color)ColorConverter.ConvertFromString(color));
 }

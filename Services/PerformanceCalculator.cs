@@ -12,6 +12,59 @@ public sealed record PerformanceSummary(
 
 public static class PerformanceCalculator
 {
+    private sealed class OpenFill
+    {
+        public required (int ConnectionId, string Symbol, string TradeId) Key { get; init; }
+        public required DateTime EntryTimeUtc { get; init; }
+        public required int Direction { get; init; }
+        public required decimal RemainingQuantity { get; set; }
+        public decimal? ExposureMultiple { get; init; }
+    }
+
+    private sealed class PositionLifecycle
+    {
+        public List<OpenFill> OpenFills { get; } = [];
+    }
+
+    private sealed class LifecycleMetrics
+    {
+        public DateTime? EntryTimeUtc { get; set; }
+        public decimal WeightedDurationTicks { get; set; }
+        public decimal WeightedQuantity { get; set; }
+        public decimal WeightedExposure { get; set; }
+        public decimal ExposureQuantity { get; set; }
+        public bool IsPositionEntry { get; set; }
+        public bool IsPositionExit { get; set; }
+
+        public void AddDuration(DateTime entryTimeUtc, DateTime endTimeUtc, decimal quantity)
+        {
+            EntryTimeUtc ??= entryTimeUtc;
+            if (quantity <= 0)
+            {
+                return;
+            }
+            WeightedDurationTicks += (decimal)Math.Max(0, (endTimeUtc - entryTimeUtc).Ticks) * quantity;
+            WeightedQuantity += quantity;
+        }
+
+        public TimeSpan? GetAverageDuration() =>
+            WeightedQuantity > 0
+                ? TimeSpan.FromTicks((long)(WeightedDurationTicks / WeightedQuantity))
+                : null;
+
+        public void AddExposure(decimal? exposure, decimal quantity)
+        {
+            if (exposure.HasValue && quantity > 0)
+            {
+                WeightedExposure += exposure.Value * quantity;
+                ExposureQuantity += quantity;
+            }
+        }
+
+        public decimal? GetAverageExposure() =>
+            ExposureQuantity > 0 ? WeightedExposure / ExposureQuantity : null;
+    }
+
     private sealed class SpotPosition
     {
         public decimal Quantity { get; set; }
@@ -27,7 +80,8 @@ public static class PerformanceCalculator
 
     public static PerformanceSummary Calculate(
         IEnumerable<TradeExecution> executions,
-        IReadOnlyDictionary<int, string> connectionNames)
+        IReadOnlyDictionary<int, string> connectionNames,
+        IReadOnlyDictionary<(int ConnectionId, string Symbol, string TradeId), decimal>? balanceAtEntry = null)
     {
         var ordered = executions
             .OrderBy(item => item.ExecutedAtUtc)
@@ -36,6 +90,7 @@ public static class PerformanceCalculator
         var spotInventory = new Dictionary<(int ConnectionId, string Symbol), SpotPosition>();
         var futuresPositions = new Dictionary<(int ConnectionId, string Symbol, string Side), Position>();
         var pnlByKey = new Dictionary<(int ConnectionId, string Symbol, string TradeId), decimal?>();
+        var lifecycleMetrics = CalculateLifecycleMetrics(ordered, balanceAtEntry);
         var points = new List<PerformancePoint>();
         var totalPnl = 0m;
         var wins = 0;
@@ -155,7 +210,21 @@ public static class PerformanceCalculator
         {
             Execution = execution,
             ConnectionName = connectionNames.TryGetValue(execution.ConnectionId, out var name) ? name : "Binance",
-            NetPnl = pnlByKey[(execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId)]
+            NetPnl = pnlByKey[(execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId)],
+            EntryTimeUtc = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?.EntryTimeUtc,
+            TimeInDeal = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
+                .GetAverageDuration(),
+            ExposureMultiple = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
+                .GetAverageExposure(),
+            IsPositionEntry = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
+                .IsPositionEntry ?? false,
+            IsPositionExit = lifecycleMetrics
+                .GetValueOrDefault((execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId))?
+                .IsPositionExit ?? false
         }).ToList();
 
         return new PerformanceSummary(
@@ -165,6 +234,139 @@ public static class PerformanceCalculator
             points,
             rows,
             hasUnconvertedFees);
+    }
+
+    private static Dictionary<(int ConnectionId, string Symbol, string TradeId), LifecycleMetrics>
+        CalculateLifecycleMetrics(
+            IReadOnlyList<TradeExecution> ordered,
+            IReadOnlyDictionary<(int ConnectionId, string Symbol, string TradeId), decimal>? balanceAtEntry)
+    {
+        var positions = new Dictionary<(int ConnectionId, string Symbol, string Market, string Side), PositionLifecycle>();
+        var metrics = new Dictionary<(int ConnectionId, string Symbol, string TradeId), LifecycleMetrics>();
+        var nowUtc = DateTime.UtcNow;
+
+        foreach (var execution in ordered)
+        {
+            var executionKey = (execution.ConnectionId, execution.Symbol, execution.ExchangeTradeId);
+            var side = execution.Market == "futures"
+                ? execution.PositionSide is "LONG" or "SHORT" ? execution.PositionSide : "BOTH"
+                : "";
+            var positionKey = (execution.ConnectionId, execution.Symbol, execution.Market, side);
+            if (!positions.TryGetValue(positionKey, out var position))
+            {
+                position = new PositionLifecycle();
+                positions[positionKey] = position;
+            }
+
+            var quantity = execution.Quantity;
+            if (execution.Market == "spot")
+            {
+                if (execution.Side == "BUY" && execution.CommissionAsset == execution.BaseAsset)
+                {
+                    quantity -= execution.Commission;
+                }
+                else if (execution.Side == "SELL" && execution.CommissionAsset == execution.BaseAsset)
+                {
+                    quantity += execution.Commission;
+                }
+            }
+            var signedQuantity = execution.Side == "BUY" ? quantity : -quantity;
+            if (signedQuantity == 0)
+            {
+                continue;
+            }
+
+            var direction = Math.Sign(signedQuantity);
+            var remainingQuantity = Math.Abs(signedQuantity);
+            if (execution.Market == "spot" && direction < 0 && position.OpenFills.Count == 0)
+            {
+                continue;
+            }
+            decimal? exposure = null;
+            if (balanceAtEntry is not null &&
+                balanceAtEntry.TryGetValue(executionKey, out var depositAtEntry) &&
+                depositAtEntry > 0 &&
+                execution.QuoteAsset == "USDT")
+            {
+                exposure = execution.QuoteQuantity / depositAtEntry;
+            }
+            if (position.OpenFills.Count == 0 || position.OpenFills[0].Direction == direction)
+            {
+                AddOpenFill(
+                    position, metrics, executionKey, execution.ExecutedAtUtc,
+                    direction, remainingQuantity, exposure);
+                continue;
+            }
+
+            while (remainingQuantity > 0 && position.OpenFills.Count > 0)
+            {
+                var openFill = position.OpenFills[0];
+                var matchedQuantity = Math.Min(remainingQuantity, openFill.RemainingQuantity);
+                var closeMetrics = GetMetrics(metrics, executionKey);
+                closeMetrics.EntryTimeUtc ??= openFill.EntryTimeUtc;
+                closeMetrics.IsPositionExit = true;
+                closeMetrics.AddDuration(openFill.EntryTimeUtc, execution.ExecutedAtUtc, matchedQuantity);
+                closeMetrics.AddExposure(openFill.ExposureMultiple, matchedQuantity);
+                GetMetrics(metrics, openFill.Key)
+                    .AddDuration(openFill.EntryTimeUtc, execution.ExecutedAtUtc, matchedQuantity);
+                openFill.RemainingQuantity -= matchedQuantity;
+                remainingQuantity -= matchedQuantity;
+                if (openFill.RemainingQuantity == 0)
+                {
+                    position.OpenFills.RemoveAt(0);
+                }
+            }
+
+            if (remainingQuantity > 0 && execution.Market == "futures")
+            {
+                AddOpenFill(
+                    position, metrics, executionKey, execution.ExecutedAtUtc,
+                    direction, remainingQuantity, exposure);
+            }
+        }
+
+        foreach (var openFill in positions.Values.SelectMany(item => item.OpenFills))
+        {
+            GetMetrics(metrics, openFill.Key)
+                .AddDuration(openFill.EntryTimeUtc, nowUtc, openFill.RemainingQuantity);
+        }
+
+        return metrics;
+    }
+
+    private static void AddOpenFill(
+        PositionLifecycle position,
+        IDictionary<(int ConnectionId, string Symbol, string TradeId), LifecycleMetrics> metrics,
+        (int ConnectionId, string Symbol, string TradeId) executionKey,
+        DateTime entryTimeUtc,
+        int direction,
+        decimal quantity,
+        decimal? exposureMultiple)
+    {
+        var executionMetrics = GetMetrics(metrics, executionKey);
+        executionMetrics.EntryTimeUtc ??= entryTimeUtc;
+        executionMetrics.IsPositionEntry = true;
+        executionMetrics.AddExposure(exposureMultiple, quantity);
+        position.OpenFills.Add(new OpenFill
+        {
+            Key = executionKey,
+            EntryTimeUtc = entryTimeUtc,
+            Direction = direction,
+            RemainingQuantity = quantity,
+            ExposureMultiple = exposureMultiple
+        });
+    }
+
+    private static LifecycleMetrics GetMetrics(
+        IDictionary<(int ConnectionId, string Symbol, string TradeId), LifecycleMetrics> metrics,
+        (int ConnectionId, string Symbol, string TradeId) key)
+    {
+        if (!metrics.TryGetValue(key, out var value))
+        {
+            value = new LifecycleMetrics();
+            metrics[key] = value;
+        }
+        return value;
     }
 
     private static decimal ConvertFee(TradeExecution execution, out bool converted)

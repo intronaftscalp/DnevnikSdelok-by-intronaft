@@ -40,6 +40,153 @@ public sealed class BinanceApiClient : IDisposable
         }
     }
 
+    public async Task<decimal> GetCurrentBalanceAsync(CancellationToken cancellationToken)
+    {
+        var endpoint = _market == "spot" ? "/api/v3/account" : "/fapi/v2/account";
+        using var document = await GetSignedJsonAsync(endpoint, "", cancellationToken);
+        if (_market == "futures")
+        {
+            return ParseDecimal(document.RootElement.GetProperty("totalWalletBalance"));
+        }
+
+        var usdt = document.RootElement.GetProperty("balances")
+            .EnumerateArray()
+            .FirstOrDefault(item =>
+                item.TryGetProperty("asset", out var asset) &&
+                asset.GetString() == "USDT");
+        if (usdt.ValueKind == JsonValueKind.Undefined)
+        {
+            return 0;
+        }
+        return ParseDecimal(usdt.GetProperty("free")) + ParseDecimal(usdt.GetProperty("locked"));
+    }
+
+    public async Task<IReadOnlyList<BalanceSnapshot>> GetSpotBalanceSnapshotsAsync(
+        int connectionId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken)
+    {
+        if (_market != "spot")
+        {
+            return [];
+        }
+
+        var parameters = $"type=SPOT" +
+                         $"&startTime={new DateTimeOffset(fromUtc).ToUnixTimeMilliseconds()}" +
+                         $"&endTime={new DateTimeOffset(toUtc).ToUnixTimeMilliseconds()}" +
+                         "&limit=30";
+        using var document = await GetSignedJsonAsync("/sapi/v1/accountSnapshot", parameters, cancellationToken);
+        if (!document.RootElement.TryGetProperty("snapshotVos", out var snapshots) ||
+            snapshots.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Binance не вернула историю снимков спотового баланса.");
+        }
+
+        var result = new List<BalanceSnapshot>();
+        foreach (var snapshot in snapshots.EnumerateArray())
+        {
+            var data = snapshot.GetProperty("data");
+            if (!data.TryGetProperty("balances", out var balances) ||
+                balances.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            var usdt = balances.EnumerateArray()
+                .FirstOrDefault(item =>
+                    item.TryGetProperty("asset", out var asset) &&
+                    asset.GetString() == "USDT");
+            var balance = usdt.ValueKind == JsonValueKind.Undefined
+                ? 0
+                : ParseDecimal(usdt.GetProperty("free")) + ParseDecimal(usdt.GetProperty("locked"));
+            result.Add(new BalanceSnapshot(
+                connectionId,
+                DateTimeOffset.FromUnixTimeMilliseconds(
+                    snapshot.GetProperty("updateTime").GetInt64()).UtcDateTime,
+                balance));
+        }
+        return result;
+    }
+
+    public async Task<IReadOnlyList<BalanceChange>> GetFuturesBalanceChangesAsync(
+        int connectionId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        CancellationToken cancellationToken)
+    {
+        if (_market != "futures")
+        {
+            return [];
+        }
+
+        var result = new List<BalanceChange>();
+        var start = fromUtc;
+        while (start < toUtc)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var end = start.AddDays(7) < toUtc ? start.AddDays(7) : toUtc;
+            await FetchFuturesBalanceChangesAsync(
+                connectionId,
+                start,
+                end,
+                result,
+                0,
+                cancellationToken);
+            start = end.AddMilliseconds(1);
+        }
+        return result;
+    }
+
+    private async Task FetchFuturesBalanceChangesAsync(
+        int connectionId,
+        DateTime fromUtc,
+        DateTime toUtc,
+        List<BalanceChange> changes,
+        int depth,
+        CancellationToken cancellationToken)
+    {
+        var parameters = $"startTime={new DateTimeOffset(fromUtc).ToUnixTimeMilliseconds()}" +
+                         $"&endTime={new DateTimeOffset(toUtc).ToUnixTimeMilliseconds()}" +
+                         "&limit=1000";
+        using var document = await GetSignedJsonAsync("/fapi/v1/income", parameters, cancellationToken);
+        if (document.RootElement.ValueKind != JsonValueKind.Array)
+        {
+            throw new InvalidOperationException("Binance не вернула историю изменений фьючерсного баланса.");
+        }
+        var rows = document.RootElement.EnumerateArray().ToList();
+        if (rows.Count == 1000)
+        {
+            if (depth >= 18 || (toUtc - fromUtc).TotalMilliseconds < 2)
+            {
+                throw new InvalidOperationException(
+                    "История фьючерсного баланса содержит слишком много событий в коротком интервале.");
+            }
+
+            var midpoint = fromUtc.AddTicks((toUtc - fromUtc).Ticks / 2);
+            await FetchFuturesBalanceChangesAsync(
+                connectionId, fromUtc, midpoint, changes, depth + 1, cancellationToken);
+            await FetchFuturesBalanceChangesAsync(
+                connectionId, midpoint.AddMilliseconds(1), toUtc, changes, depth + 1, cancellationToken);
+            return;
+        }
+
+        foreach (var row in rows)
+        {
+            var time = row.GetProperty("time").GetInt64();
+            var transactionId = row.GetProperty("tranId").ToString();
+            var asset = row.GetProperty("asset").GetString() ?? "";
+            var type = row.GetProperty("incomeType").GetString() ?? "";
+            changes.Add(new BalanceChange(
+                connectionId,
+                $"{transactionId}:{time}:{asset}:{type}",
+                DateTimeOffset.FromUnixTimeMilliseconds(time).UtcDateTime,
+                ParseDecimal(row.GetProperty("income")),
+                asset,
+                type));
+        }
+    }
+
     public async Task<int> FetchExecutionsAsync(
         int connectionId,
         DateTime? lastSyncedUtc,

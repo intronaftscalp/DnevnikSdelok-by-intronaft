@@ -1,233 +1,60 @@
 <Window x:Class="DnevnikSdelok.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="DnevnikSdelok" Height="900" Width="1500"
-        MinHeight="720" MinWidth="1120"
-        WindowStartupLocation="CenterScreen"
-        Background="#0B1118" Foreground="#E8EDF2"
-        Loaded="WindowLoaded" Closing="WindowClosing">
+        xmlns:local="clr-namespace:DnevnikSdelok"
+        Title="DnevnikSdelok — Мои сделки"
+        Height="920" Width="1500" MinHeight="680" MinWidth="980"
+        WindowStartupLocation="CenterScreen" WindowState="Maximized"
+        ResizeMode="CanResize"
+        Background="#000000" Foreground="#00FF41"
+        Loaded="WindowLoaded" Closing="WindowClosing" PreviewKeyDown="WindowPreviewKeyDown">
     <Window.Resources>
-        <SolidColorBrush x:Key="PanelBrush" Color="#121B24"/>
-        <SolidColorBrush x:Key="BorderBrush" Color="#25323E"/>
-        <SolidColorBrush x:Key="MutedBrush" Color="#91A0AD"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#72D6A0"/>
-        <Style TargetType="Button">
-            <Setter Property="Background" Value="#202D38"/>
-            <Setter Property="Foreground" Value="#E8EDF2"/>
-            <Setter Property="BorderBrush" Value="#32414E"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="14,9"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Cursor" Value="Hand"/>
-        </Style>
-        <Style TargetType="TextBox">
-            <Setter Property="Background" Value="#0C131A"/>
-            <Setter Property="Foreground" Value="#E8EDF2"/>
-            <Setter Property="BorderBrush" Value="#293744"/>
-            <Setter Property="CaretBrush" Value="#E8EDF2"/>
-            <Setter Property="Padding" Value="10,8"/>
-            <Setter Property="FontSize" Value="13"/>
-        </Style>
-        <Style TargetType="ComboBox">
-            <Setter Property="Background" Value="#0C131A"/>
-            <Setter Property="Foreground" Value="#E8EDF2"/>
-            <Setter Property="BorderBrush" Value="#293744"/>
-            <Setter Property="Padding" Value="8,6"/>
-            <Setter Property="MinWidth" Value="142"/>
-        </Style>
-        <Style TargetType="DataGrid">
-            <Setter Property="Background" Value="#101821"/>
-            <Setter Property="Foreground" Value="#DCE4EA"/>
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="RowBackground" Value="#101821"/>
-            <Setter Property="AlternatingRowBackground" Value="#141E28"/>
-            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
-            <Setter Property="HorizontalGridLinesBrush" Value="#202C37"/>
-            <Setter Property="VerticalGridLinesBrush" Value="#101821"/>
-            <Setter Property="HeadersVisibility" Value="Column"/>
-            <Setter Property="CanUserAddRows" Value="False"/>
-            <Setter Property="CanUserDeleteRows" Value="False"/>
-            <Setter Property="CanUserReorderColumns" Value="True"/>
-            <Setter Property="CanUserResizeColumns" Value="True"/>
-            <Setter Property="CanUserSortColumns" Value="True"/>
-            <Setter Property="IsReadOnly" Value="True"/>
-            <Setter Property="RowHeight" Value="38"/>
-            <Setter Property="ColumnHeaderHeight" Value="40"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="SelectionUnit" Value="FullRow"/>
-            <Setter Property="SelectionMode" Value="Single"/>
-            <Setter Property="BorderBrush" Value="#202C37"/>
-            <Setter Property="HorizontalScrollBarVisibility" Value="Auto"/>
-        </Style>
-        <Style TargetType="DataGridColumnHeader">
-            <Setter Property="Background" Value="#17222C"/>
-            <Setter Property="Foreground" Value="#91A0AD"/>
-            <Setter Property="BorderBrush" Value="#25323E"/>
-            <Setter Property="Padding" Value="10,5"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-        </Style>
-        <Style TargetType="DataGridCell">
-            <Setter Property="BorderThickness" Value="0"/>
-            <Setter Property="Padding" Value="10,5"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-        </Style>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkControls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
     </Window.Resources>
-
-    <Grid Margin="28,22,28,20">
+    <Grid Margin="18,12,18,12">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="250"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
-
-        <Grid Margin="0,0,0,20">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <StackPanel>
-                <TextBlock Text="DnevnikSdelok" FontSize="26" FontWeight="SemiBold"/>
-                <TextBlock Text="Локальный журнал сделок · Binance через Vataga"
-                           Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
-            </StackPanel>
-            <WrapPanel Grid.Column="1" VerticalAlignment="Center">
-                <Button Content="＋  Подключить API" Margin="0,0,8,0"
-                        Background="{StaticResource AccentBrush}" Foreground="#101812"
-                        BorderBrush="{StaticResource AccentBrush}" Click="AddConnectionClick"/>
-                <Button x:Name="RefreshButton" Content="↻  Обновить" Margin="0,0,8,0" Click="RefreshClick"/>
-                <Button Content="Экспорт CSV" Margin="0,0,8,0" Click="ExportClick"/>
-                <Button Content="Резервная копия" Click="BackupClick"/>
-            </WrapPanel>
-        </Grid>
-
-        <UniformGrid Grid.Row="1" Columns="4" Margin="0,0,0,16">
-            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="9" Padding="18" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="КУМУЛЯТИВНЫЙ P&amp;L" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
-                    <TextBlock x:Name="PnlValue" Text="0,00 USDT" FontSize="25" FontWeight="SemiBold" Margin="0,10,0,0"/>
-                    <TextBlock Text="реализованный P&amp;L в USDT после известных комиссий"
-                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                </StackPanel>
-            </Border>
-            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="9" Padding="18" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="ВИНРЕЙТ" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
-                    <TextBlock x:Name="WinRateValue" Text="—" FontSize="25" FontWeight="SemiBold" Margin="0,10,0,0"/>
-                    <TextBlock x:Name="WinRateCaption" Text="по закрытым позициям"
-                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                </StackPanel>
-            </Border>
-            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="9" Padding="18" Margin="0,0,12,0">
-                <StackPanel>
-                    <TextBlock Text="ИСПОЛНЕНИЙ" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
-                    <TextBlock x:Name="ExecutionCountValue" Text="0" FontSize="25" FontWeight="SemiBold" Margin="0,10,0,0"/>
-                    <TextBlock Text="из локальной базы за выбранный период"
-                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                </StackPanel>
-            </Border>
-            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                    BorderThickness="1" CornerRadius="9" Padding="18">
-                <StackPanel>
-                    <TextBlock Text="СИНХРОНИЗАЦИЯ" Foreground="{StaticResource MutedBrush}" FontSize="11"/>
-                    <TextBlock x:Name="SyncStatusValue" Text="Ожидание" FontSize="20" FontWeight="SemiBold" Margin="0,10,0,0"/>
-                    <TextBlock x:Name="LastSyncValue" Text="Добавьте API-подключение"
-                               Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                </StackPanel>
-            </Border>
-        </UniformGrid>
-
-        <Border Grid.Row="2" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1" CornerRadius="9" Padding="18" Margin="0,0,0,16">
+        <Border x:Name="HeaderBand" Grid.Row="0" Margin="0,0,0,12"
+                Background="#030A04" BorderBrush="{DynamicResource BorderBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="16,10">
             <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <StackPanel>
-                        <TextBlock Text="Кумулятивная прибыль" FontSize="16" FontWeight="SemiBold"/>
-                        <TextBlock Text="Реализованный P&amp;L в USDT-парах после известных комиссий"
-                                   Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,4,0,0"/>
-                    </StackPanel>
-                    <TextBlock x:Name="ChartEndValue" Grid.Column="1" Text="0,00 USDT"
-                               Foreground="{StaticResource AccentBrush}" FontSize="14" FontWeight="SemiBold"/>
-                </Grid>
-                <Canvas x:Name="ProfitCanvas" Grid.Row="1" Margin="4,12,4,0" SizeChanged="ChartSizeChanged"/>
-            </Grid>
-        </Border>
-
-        <Grid Grid.Row="3" Margin="0,0,0,10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <TextBlock Text="Сделки" FontSize="17" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,20,0"/>
-                <TextBox x:Name="SearchBox" Width="230" Height="36" VerticalContentAlignment="Center"
-                         TextChanged="SearchTextChanged" ToolTip="Поиск по паре, рынку или направлению"/>
-            </StackPanel>
-            <StackPanel Grid.Column="1" Orientation="Horizontal">
-                <ComboBox x:Name="ConnectionFilter" SelectionChanged="FilterChanged" Margin="0,0,8,0">
-                    <ComboBoxItem Content="Все подключения" Tag="all" IsSelected="True"/>
-                </ComboBox>
-                <ComboBox x:Name="PeriodFilter" SelectionChanged="FilterChanged">
-                    <ComboBoxItem Content="30 дней" Tag="30" IsSelected="True"/>
-                    <ComboBoxItem Content="7 дней" Tag="7"/>
-                    <ComboBoxItem Content="90 дней" Tag="90"/>
-                    <ComboBoxItem Content="Всё время" Tag="all"/>
-                </ComboBox>
-            </StackPanel>
-        </Grid>
-
-        <Border Grid.Row="4" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                BorderThickness="1" CornerRadius="9" ClipToBounds="True">
-            <Grid>
-                <DataGrid x:Name="ExecutionsGrid" AlternationCount="2">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="Дата и время" Binding="{Binding ExecutedAtLocal, StringFormat={}{0:dd.MM.yyyy HH:mm:ss}}" SortMemberPath="ExecutedAtLocal" Width="155"/>
-                        <DataGridTextColumn Header="Аккаунт" Binding="{Binding ConnectionName}" SortMemberPath="ConnectionName" Width="170"/>
-                        <DataGridTextColumn Header="Рынок" Binding="{Binding MarketLabel}" SortMemberPath="MarketLabel" Width="105"/>
-                        <DataGridTextColumn Header="Пара" Binding="{Binding Symbol}" SortMemberPath="Symbol" Width="120"/>
-                        <DataGridTextColumn Header="Сторона" Binding="{Binding SideLabel}" SortMemberPath="SideLabel" Width="110"/>
-                        <DataGridTextColumn Header="Цена" Binding="{Binding Price, StringFormat=N8}" SortMemberPath="Price" Width="140"/>
-                        <DataGridTextColumn Header="Количество" Binding="{Binding Quantity, StringFormat=N8}" SortMemberPath="Quantity" Width="135"/>
-                        <DataGridTextColumn Header="Комиссия" Binding="{Binding Commission, StringFormat=N8}" SortMemberPath="Commission" Width="135"/>
-                        <DataGridTextColumn Header="Валюта комиссии" Binding="{Binding CommissionAsset}" SortMemberPath="CommissionAsset" Width="130"/>
-                        <DataGridTextColumn Header="Реализ. P&amp;L / расчёт" Binding="{Binding PnlDisplay}" SortMemberPath="NetPnl" Width="155"/>
-                    </DataGrid.Columns>
-                </DataGrid>
-                <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center"
-                            IsHitTestVisible="False" MaxWidth="520">
-                    <TextBlock Text="Пока нет сделок" FontSize="21" FontWeight="SemiBold"
-                               HorizontalAlignment="Center"/>
-                    <TextBlock Text="Добавьте отдельные read-only API-ключи Vataga для спота и фьючерсов. После подключения загрузка начнётся автоматически."
-                               TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}"
-                               TextAlignment="Center" Margin="0,10,0,0" LineHeight="22"/>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="DnevnikSdelok" FontSize="23" FontWeight="SemiBold"/>
+                    <TextBlock Text="Мои сделки · Binance через Vataga"
+                               Foreground="{DynamicResource MutedBrush}" Margin="0,5,0,0"/>
                 </StackPanel>
             </Grid>
         </Border>
-
-        <Grid Grid.Row="5" Margin="2,10,2,0">
+        <ScrollViewer x:Name="DashboardScrollViewer" Grid.Row="1" Background="#000000"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+            <WrapPanel x:Name="DashboardWidgets" AllowDrop="True"
+                       Drop="DashboardDrop" DragOver="DashboardDragOver"/>
+        </ScrollViewer>
+        <Grid Grid.Row="2" Margin="2,10,2,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock x:Name="StatusText" Text="Данные хранятся локально на этом компьютере."
-                       Foreground="{StaticResource MutedBrush}" FontSize="11"
+                       Foreground="{DynamicResource MutedBrush}" FontSize="11"
                        TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
-            <Button x:Name="RemoveConnectionButton" Grid.Column="1" Content="Удалить подключение"
-                    Padding="10,5" FontSize="11" Visibility="Collapsed"
+            <Button x:Name="RemoveConnectionButton" Grid.Column="1" Content="Удалить выбранное подключение"
+                    Padding="10,5" FontSize="11" Margin="0,0,8,0" Visibility="Collapsed"
                     Click="RemoveConnectionClick"/>
+            <Button Content="⚙  Настройки" Grid.Column="2" Padding="10,5"
+                    FontSize="11" Click="SettingsClick"/>
         </Grid>
     </Grid>
 </Window>

@@ -9,6 +9,7 @@ public sealed class ApiConnection
     public byte[] ProtectedApiSecret { get; set; } = [];
     public DateTime? LastSyncedUtc { get; set; }
     public string? LastStatus { get; set; }
+    public decimal? CurrentBalance { get; set; }
 
     public string DisplayName => $"{Name} · Binance · {Market}";
 }

@@ -1,0 +1,95 @@
+<Window x:Class="DnevnikSdelok.DashboardSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Настройки главного экрана"
+        Width="920" Height="760" MinWidth="760" MinHeight="600"
+        WindowStartupLocation="CenterOwner" Background="#000000" Foreground="#00FF41">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Themes/DarkControls.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        <StackPanel Margin="0,0,0,14">
+            <TextBlock Text="Настройки главного экрана" FontSize="23" FontWeight="SemiBold"/>
+            <TextBlock Text="Изменения применяются и сохраняются автоматически."
+                       Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
+        </StackPanel>
+
+        <TabControl x:Name="SettingsTabs" Grid.Row="1" Background="#000000" Foreground="#00FF41"
+                    BorderBrush="#064D1B">
+            <TabItem Header="Виджеты и цвета" Padding="12,7">
+                <ScrollViewer Background="#000000" VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="16">
+                        <TextBlock Text="Фон и основные цвета" FontSize="17" FontWeight="SemiBold"/>
+                        <TextBlock Text="Введите HEX-цвет, например #00FF41. Изменения применяются сразу."
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,5,0,12"/>
+                        <WrapPanel x:Name="GlobalColorsPanel"/>
+                        <TextBlock Text="Встроенный график TradingView загружается через интернет. Инструменты и рисунки принадлежат TradingView; дневник не сохраняет их локально и не наносит на график отметки исполнений автоматически."
+                                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,2,0,10"/>
+                        <CheckBox x:Name="ShowHeaderCheckBox" Content="Показывать верхнюю панель главного экрана"
+                                  Margin="0,6,0,8" Checked="ShowHeaderChanged"
+                                  Unchecked="ShowHeaderChanged"/>
+                        <Separator Margin="0,12"/>
+                        <TextBlock Text="Виджеты" FontSize="17" FontWeight="SemiBold" Margin="0,5,0,10"/>
+                        <TextBlock Text="Порядок в этом списке задаёт расположение на экране. Можно скрыть виджет, вернуть его и изменить размер."
+                                   Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,10"/>
+                        <StackPanel x:Name="WidgetsPanel"/>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+            <TabItem Header="Колонки «Мои сделки»" Padding="12,7">
+                <Grid Margin="16">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel Margin="0,0,0,12">
+                        <TextBlock Text="Видимые и скрытые колонки" FontSize="17" FontWeight="SemiBold"/>
+                        <TextBlock Text="Порядок и ширину также можно менять перетаскиванием заголовков таблицы."
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/>
+                    </StackPanel>
+                    <ScrollViewer Grid.Row="1" Background="#000000" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="ColumnsPanel"/>
+                    </ScrollViewer>
+                </Grid>
+            </TabItem>
+            <TabItem Header="Действия" Padding="12,7">
+                <StackPanel Margin="16">
+                    <TextBlock Text="Операции с журналом" FontSize="17" FontWeight="SemiBold"/>
+                    <TextBlock Text="Подключения, обновление истории, экспорт и резервное копирование доступны здесь, чтобы освободить главное окно."
+                               Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,5,0,16"/>
+                    <Button Content="＋  Подключить API" Tag="connect" HorizontalAlignment="Left"
+                            MinWidth="220" Margin="0,0,0,9" Click="ActionClick"/>
+                    <Button x:Name="RefreshActionButton" Content="↻  Обновить список сделок" Tag="refresh"
+                            HorizontalAlignment="Left" MinWidth="220" Margin="0,0,0,9"
+                            Click="ActionClick"/>
+                    <Button Content="Экспорт CSV" Tag="export" HorizontalAlignment="Left"
+                            MinWidth="220" Margin="0,0,0,9" Click="ActionClick"/>
+                    <Button Content="Резервная копия" Tag="backup" HorizontalAlignment="Left"
+                            MinWidth="220" Click="ActionClick"/>
+                </StackPanel>
+            </TabItem>
+        </TabControl>
+
+        <Grid Grid.Row="2" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="SavedText" Text="Сохранено локально"
+                       Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center"/>
+            <Button Content="Сбросить настройки" Grid.Column="1" Margin="0,0,10,0"
+                    Click="ResetClick"/>
+            <Button Content="Готово" Grid.Column="2" MinWidth="90" Click="CloseClick"/>
+        </Grid>
+    </Grid>
+</Window>
